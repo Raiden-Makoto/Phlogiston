@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environment
+.venv/
+
+# Data & artifacts
+data/raw/
+data/cache/
+data/processed/
+runs/
+*.ckpt
+*.pt
+*.log
+
+# Secrets
+.env
+
+# OS / editor
+.DS_Store
+.ipynb_checkpoints/

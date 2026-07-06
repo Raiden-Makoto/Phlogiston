@@ -1,0 +1,14 @@
+# Keep the build context small, but KEEP .git so `git pull` works inside the
+# container (the whole point of the enter-container -> pull -> test workflow).
+.venv/
+data/raw/
+data/cache/
+data/processed/
+runs/
+**/__pycache__/
+*.pyc
+*.log
+*.ckpt
+*.pt
+.DS_Store
+.ipynb_checkpoints/
