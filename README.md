@@ -96,7 +96,15 @@ phlogiston gnome-info                                    # load summary, print s
 
 # Materials Project: stable + near-stable, non-radioactive structures
 phlogiston fetch-mp --max-energy-above-hull 0.05 --exclude-radioactive
+phlogiston fetch-mp-elasticity                          # elastic + derived labels
+
+phlogiston datasets-summary                             # label coverage across all sets
 ```
+
+Label coverage is intentionally uneven — every structure has stability info,
+but only a subset (~12k MP materials) has measured elastic moduli. `datasets-summary`
+prints exactly which labels each set carries; the model handles this with a shared
+encoder + per-property heads trained under masked multi-task losses.
 
 `fetch-mp` runs in two phases and is **resumable**: it writes `mp_metadata.csv`
 first, then downloads structures in batches, skipping CIFs already on disk and

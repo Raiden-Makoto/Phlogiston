@@ -78,6 +78,68 @@ def _cmd_fetch_mp_elasticity(args: argparse.Namespace) -> int:
     return 0
 
 
+def _count_data_lines(path) -> int:
+    with open(path, "rb") as f:
+        return max(sum(1 for _ in f) - 1, 0)  # minus header
+
+
+def _cmd_datasets_summary(args: argparse.Namespace) -> int:
+    import zipfile
+
+    import pandas as pd
+
+    root = args.data_root
+    print(f"Phlogiston dataset summary  (root: {root})\n")
+
+    # --- GNoME ---
+    gnome_summary = gnome.local_path(root, "summary_pbe")
+    gnome_n = _count_data_lines(gnome_summary) if gnome_summary.exists() else 0
+    gnome_zip = gnome.local_path(root, "structures_by_id")
+    gnome_cifs = 0
+    if gnome_zip.exists():
+        with zipfile.ZipFile(gnome_zip) as z:
+            gnome_cifs = sum(1 for n in z.namelist() if n.lower().endswith(".cif"))
+
+    # --- Materials Project ---
+    meta_ids: set[str] = set()
+    meta_path = mp.metadata_path(root)
+    if meta_path.exists():
+        meta_ids = set(pd.read_csv(meta_path, usecols=["material_id"])["material_id"])
+
+    elas_ids: set[str] = set()
+    elas_path = mp.elasticity_path(root)
+    if elas_path.exists():
+        elas_ids = set(pd.read_csv(elas_path, usecols=["material_id"])["material_id"])
+
+    cifs = mp.cif_dir(root)
+    n_cifs = len(list(cifs.glob("*.cif"))) if cifs.exists() else 0
+
+    both = len(meta_ids & elas_ids)
+    elas_only = len(elas_ids - meta_ids)
+
+    def row(name, n, struct, stab, mech):
+        print(f"  {name:<28} {n:>10,}   {struct:^9} {stab:^9} {mech:^12}")
+
+    print("  SOURCE                            count   structure stability  mech/thermal")
+    print("  " + "-" * 74)
+    row("GNoME (summary)", gnome_n, "zip" if gnome_cifs else "-", "yes", "-")
+    row("MP near-stable", len(meta_ids), "yes", "yes", f"{both:,} of them")
+    row("MP elasticity", len(elas_ids), "yes", "yes", "yes")
+    print()
+    print(f"  GNoME structure CIFs (by_id.zip): {gnome_cifs:,}")
+    print(f"  MP structure CIFs on disk:        {n_cifs:,}")
+    print()
+    print("  Label overlap (MP):")
+    print(f"    stability + mech/thermal (both): {both:,}")
+    print(f"    mech/thermal only (metastable):  {elas_only:,}")
+    print(f"    total mech/thermal-labeled:      {len(elas_ids):,}")
+    print()
+    print("  -> No single material has every label. Shared encoder trains on all")
+    print("     structures (stability/density); property heads train on the mech")
+    print("     subset via masked multi-task losses.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="phlogiston", description=__doc__)
     p.add_argument(
@@ -134,6 +196,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Don't download structures for elasticity materials")
     e.add_argument("--force", action="store_true", help="Overwrite existing CIFs")
     e.set_defaults(func=_cmd_fetch_mp_elasticity)
+
+    sub.add_parser("datasets-summary",
+                   help="Print label coverage across GNoME + MP datasets"
+                   ).set_defaults(func=_cmd_datasets_summary)
 
     return p
 
