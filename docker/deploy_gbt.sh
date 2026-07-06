@@ -43,21 +43,33 @@ build() {
 # value; otherwise read it out of the local ~/.bashrc (scripts run
 # non-interactively, so we can't rely on it being sourced).
 PAT_VAR="${PAT_VAR:-CROISSANT}"
-resolve_pat() {
-    GITHUB_PAT="${!PAT_VAR:-}"
-    if [ -z "${GITHUB_PAT}" ]; then
-        GITHUB_PAT="$(grep -E "^\s*export\s+${PAT_VAR}=" "${HOME}/.bashrc" 2>/dev/null \
-            | tail -1 | sed -E "s/^\s*export\s+${PAT_VAR}=//" | tr -d '"'\''')"
+# Read an env var, falling back to its `export VAR=...` line in ~/.bashrc
+# (scripts run non-interactively, so ~/.bashrc isn't sourced for us).
+resolve_var() {
+    local name="$1" val="${!1:-}"
+    if [ -z "${val}" ]; then
+        val="$(grep -E "^\s*export\s+${name}=" "${HOME}/.bashrc" 2>/dev/null \
+            | tail -1 | sed -E "s/^\s*export\s+${name}=//" | tr -d '"'\''')"
     fi
+    printf '%s' "${val}"
+}
+
+# Materials Project API key env var (contents fetched into the container).
+MP_KEY_VAR="${MP_KEY_VAR:-MP54AC}"
+
+resolve_pat() {
+    GITHUB_PAT="$(resolve_var "${PAT_VAR}")"
     [ -n "${GITHUB_PAT}" ] || { echo "${PAT_VAR} not set and not found in ~/.bashrc" >&2; exit 1; }
 }
 
 run() {
     echo ">> Launching container ${CONTAINER} on ${SSH_HOST}"
     resolve_pat
-    # Ship the PAT to the box in a 0600 env-file (removed after the session),
-    # then pass it into the container so git can auth over HTTPS.
-    ssh "${SSH_HOST}" "umask 077 && printf 'GITHUB_PAT=%s\n' '${GITHUB_PAT}' > ~/.phlogiston.env && mkdir -p '${DATA_DIR}'"
+    MP_KEY="$(resolve_var "${MP_KEY_VAR}")"   # optional; only needed for MP fetches
+    # Ship secrets to the box in a 0600 env-file (removed after the session),
+    # then pass them into the container: GITHUB_PAT for git auth over HTTPS and
+    # MP_API_KEY for Materials Project fetches.
+    ssh "${SSH_HOST}" "umask 077 && { printf 'GITHUB_PAT=%s\n' '${GITHUB_PAT}'; printf 'MP_API_KEY=%s\n' '${MP_KEY}'; } > ~/.phlogiston.env && mkdir -p '${DATA_DIR}'"
     # Pass the host's numeric render/video GIDs (names don't reliably map) so
     # the container can access /dev/kfd and /dev/dri.
     ssh -t "${SSH_HOST}" 'docker run -it --rm \

@@ -6,5 +6,6 @@ featurization.
 """
 
 from phlogiston.data import gnome
+from phlogiston.data import materials_project
 
-__all__ = ["gnome"]
+__all__ = ["gnome", "materials_project"]

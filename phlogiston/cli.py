@@ -13,6 +13,7 @@ import argparse
 from pathlib import Path
 
 from phlogiston.data import gnome
+from phlogiston.data import materials_project as mp
 
 
 def _cmd_fetch_gnome(args: argparse.Namespace) -> int:
@@ -36,6 +37,23 @@ def _cmd_gnome_info(args: argparse.Namespace) -> int:
     )
     if "elements" in df.columns:
         print(f"[gnome] example rows:\n{df.head(3).to_string()}")
+    return 0
+
+
+def _cmd_fetch_mp(args: argparse.Namespace) -> int:
+    df = mp.fetch_structures(
+        args.data_root,
+        elements=args.elements,
+        num_elements=tuple(args.num_elements) if args.num_elements else None,
+        num_sites_max=args.num_sites_max,
+        is_stable=(True if args.stable_only else None),
+        limit=args.limit,
+        save_cif=not args.no_cif,
+        force=args.force,
+    )
+    print(f"[mp] fetched {len(df):,} materials")
+    if len(df):
+        print(df.head(3).to_string())
     return 0
 
 
@@ -64,6 +82,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Decomposition-energy threshold (eV/atom) for 'stable' count",
     )
     g.set_defaults(func=_cmd_gnome_info)
+
+    m = sub.add_parser("fetch-mp", help="Download Materials Project structures + labels")
+    m.add_argument("--elements", nargs="+", default=None,
+                   help="Restrict to materials containing these elements")
+    m.add_argument("--num-elements", nargs=2, type=int, default=None,
+                   metavar=("MIN", "MAX"), help="Min/max number of distinct elements")
+    m.add_argument("--num-sites-max", type=int, default=None,
+                   help="Cap sites per unit cell (keeps graphs tractable)")
+    m.add_argument("--stable-only", action="store_true",
+                   help="Only fetch thermodynamically stable materials")
+    m.add_argument("--limit", type=int, default=None,
+                   help="Max number of materials to fetch (default: all matching)")
+    m.add_argument("--no-cif", action="store_true", help="Skip writing CIF files")
+    m.add_argument("--force", action="store_true", help="Overwrite existing CIFs")
+    m.set_defaults(func=_cmd_fetch_mp)
 
     return p
 
