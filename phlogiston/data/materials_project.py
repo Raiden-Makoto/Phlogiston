@@ -17,8 +17,9 @@ Storage layout (mirrors the GNoME raw layout)::
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Callable, Sequence
 
 import pandas as pd
 from tqdm import tqdm
@@ -90,13 +91,27 @@ def metadata_path(data_root: str | Path) -> Path:
     return raw_dir(data_root) / "mp_metadata.csv"
 
 
-def _resolve_chunking(limit: int | None, chunk_size: int) -> tuple[int | None, int]:
-    """Translate a total ``limit`` into (num_chunks, chunk_size) for mp-api."""
-    if limit is None:
-        return None, chunk_size
-    chunk_size = min(chunk_size, limit)
-    num_chunks = max(1, -(-limit // chunk_size))  # ceil div
-    return num_chunks, chunk_size
+def _with_retries(fn: Callable, *, tries: int = 4, backoff: float = 3.0, what: str = "request"):
+    """Call ``fn`` retrying on transient MP API / network errors."""
+    from mp_api.client.core.exceptions import MPRestError
+
+    last: Exception | None = None
+    for attempt in range(1, tries + 1):
+        try:
+            return fn()
+        except (MPRestError, Exception) as exc:  # noqa: BLE001 - want broad transient catch
+            last = exc
+            if attempt == tries:
+                break
+            wait = backoff * attempt
+            print(f"[mp] {what} failed (attempt {attempt}/{tries}): {exc}. Retrying in {wait:.0f}s")
+            time.sleep(wait)
+    raise RuntimeError(f"[mp] {what} failed after {tries} attempts") from last
+
+
+def _batches(seq: Sequence, size: int):
+    for i in range(0, len(seq), size):
+        yield seq[i : i + size]
 
 
 def fetch_structures(
@@ -110,8 +125,7 @@ def fetch_structures(
     is_stable: bool | None = None,
     max_energy_above_hull: float | None = None,
     limit: int | None = None,
-    chunk_size: int = 1000,
-    fields: Iterable[str] = DEFAULT_FIELDS,
+    structure_batch: int = 500,
     save_cif: bool = True,
     force: bool = False,
 ) -> pd.DataFrame:
@@ -128,8 +142,14 @@ def fetch_structures(
     max_energy_above_hull: keep materials with 0 <= e_above_hull <= this value
         (eV/atom); e.g. 0.05 selects stable + near-stable (metastable) materials.
     limit: max number of materials to fetch (None = all matching).
+    structure_batch: how many structures to request per API call in phase 2.
 
-    Returns the metadata DataFrame (also written to ``mp_metadata.csv``).
+    The fetch runs in two phases and is resumable: (1) pull lightweight metadata
+    for all matching materials and write ``mp_metadata.csv`` immediately, then
+    (2) download structures in small batches, writing CIFs incrementally and
+    skipping any already on disk. Re-running resumes where it left off.
+
+    Returns the metadata DataFrame.
     """
     # Imported lazily so the package imports without mp-api present.
     from mp_api.client import MPRester
@@ -138,57 +158,82 @@ def fetch_structures(
     cifs = cif_dir(data_root)
     cifs.mkdir(parents=True, exist_ok=True)
 
-    search_kwargs: dict = {"fields": list(fields)}
+    filters: dict = {}
     if elements is not None:
-        search_kwargs["elements"] = list(elements)
+        filters["elements"] = list(elements)
     if exclude_elements is not None:
-        search_kwargs["exclude_elements"] = list(exclude_elements)
+        filters["exclude_elements"] = list(exclude_elements)
     if num_elements is not None:
-        search_kwargs["num_elements"] = tuple(num_elements)
+        filters["num_elements"] = tuple(num_elements)
     if num_sites_max is not None:
-        search_kwargs["num_sites"] = (1, num_sites_max)
+        filters["num_sites"] = (1, num_sites_max)
     if is_stable is not None:
-        search_kwargs["is_stable"] = is_stable
+        filters["is_stable"] = is_stable
     if max_energy_above_hull is not None:
-        search_kwargs["energy_above_hull"] = (0.0, max_energy_above_hull)
-    num_chunks, chunk = _resolve_chunking(limit, chunk_size)
-    if num_chunks is not None:
-        search_kwargs["num_chunks"] = num_chunks
-    search_kwargs["chunk_size"] = chunk
+        filters["energy_above_hull"] = (0.0, max_energy_above_hull)
 
-    print(f"[mp] querying Materials Project (limit={limit}) ...")
+    meta_fields = [f for f in DEFAULT_FIELDS if f != "structure"]
+
     with MPRester(key) as mpr:
-        docs = mpr.materials.summary.search(**search_kwargs)
-
-    rows: list[dict] = []
-    for doc in tqdm(docs, desc="[mp] structures"):
-        mid = str(doc.material_id)
-        symmetry = getattr(doc, "symmetry", None)
-        rows.append(
-            {
-                "material_id": mid,
-                "formula_pretty": getattr(doc, "formula_pretty", None),
-                "nsites": getattr(doc, "nsites", None),
-                "elements": [str(e) for e in (getattr(doc, "elements", None) or [])],
-                "formation_energy_per_atom": getattr(doc, "formation_energy_per_atom", None),
-                "energy_above_hull": getattr(doc, "energy_above_hull", None),
-                "is_stable": getattr(doc, "is_stable", None),
-                "band_gap": getattr(doc, "band_gap", None),
-                "spacegroup_number": getattr(symmetry, "number", None) if symmetry else None,
-                "crystal_system": str(getattr(symmetry, "crystal_system", "")) or None,
-            }
+        # --- Phase 1: metadata (fast, no structures) --------------------
+        print(f"[mp] phase 1/2: querying metadata ({filters}) ...")
+        docs = _with_retries(
+            lambda: mpr.materials.summary.search(fields=meta_fields, **filters),
+            what="metadata search",
         )
-        if save_cif and getattr(doc, "structure", None) is not None:
-            dest = cifs / f"{mid}.cif"
-            if force or not dest.exists():
-                doc.structure.to(filename=str(dest), fmt="cif")
+        rows: list[dict] = []
+        for doc in docs:
+            symmetry = getattr(doc, "symmetry", None)
+            rows.append(
+                {
+                    "material_id": str(doc.material_id),
+                    "formula_pretty": getattr(doc, "formula_pretty", None),
+                    "nsites": getattr(doc, "nsites", None),
+                    "elements": [str(e) for e in (getattr(doc, "elements", None) or [])],
+                    "formation_energy_per_atom": getattr(doc, "formation_energy_per_atom", None),
+                    "energy_above_hull": getattr(doc, "energy_above_hull", None),
+                    "is_stable": getattr(doc, "is_stable", None),
+                    "band_gap": getattr(doc, "band_gap", None),
+                    "spacegroup_number": getattr(symmetry, "number", None) if symmetry else None,
+                    "crystal_system": str(getattr(symmetry, "crystal_system", "")) or None,
+                }
+            )
 
-    df = pd.DataFrame(rows, columns=list(_METADATA_COLUMNS))
-    meta = metadata_path(data_root)
-    df.to_csv(meta, index=False)
-    print(f"[mp] wrote {len(df):,} rows -> {meta}")
-    if save_cif:
-        print(f"[mp] wrote {len(list(cifs.glob('*.cif'))):,} CIFs -> {cifs}")
+        df = pd.DataFrame(rows, columns=list(_METADATA_COLUMNS))
+        if limit is not None:
+            df = df.head(limit)
+        meta = metadata_path(data_root)
+        df.to_csv(meta, index=False)
+        print(f"[mp] phase 1 done: {len(df):,} rows -> {meta}")
+
+        if not save_cif:
+            return df
+
+        # --- Phase 2: structures (batched, resumable) -------------------
+        material_ids = [m for m in df["material_id"].tolist()
+                        if force or not (cifs / f"{m}.cif").exists()]
+        have = len(df) - len(material_ids)
+        print(f"[mp] phase 2/2: {len(material_ids):,} structures to fetch "
+              f"({have:,} already on disk), batch={structure_batch}")
+
+        written = 0
+        with tqdm(total=len(material_ids), desc="[mp] structures") as bar:
+            for batch in _batches(material_ids, structure_batch):
+                sdocs = _with_retries(
+                    lambda b=batch: mpr.materials.summary.search(
+                        material_ids=b, fields=["material_id", "structure"]
+                    ),
+                    what=f"structure batch ({len(batch)})",
+                )
+                for d in sdocs:
+                    struct = getattr(d, "structure", None)
+                    if struct is not None:
+                        struct.to(filename=str(cifs / f"{d.material_id}.cif"), fmt="cif")
+                        written += 1
+                bar.update(len(batch))
+
+    print(f"[mp] wrote {written:,} new CIFs (total on disk: "
+          f"{len(list(cifs.glob('*.cif'))):,}) -> {cifs}")
     return df
 
 
