@@ -25,6 +25,15 @@ from tqdm import tqdm
 
 API_KEY_ENV_VARS = ("MP54AC", "MP_API_KEY", "MP_API_TOKEN")
 
+# Radioactive elements to screen out of the training corpus: those with no
+# stable isotopes (Tc, Pm) plus Po..Pu (Z 84-94). Transplutonium/superheavy
+# elements are omitted -- they never appear in Materials Project and their
+# symbols are rejected by the API's element validation.
+RADIOACTIVE_ELEMENTS: tuple[str, ...] = (
+    "Tc", "Pm",
+    "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu",
+)
+
 # Summary fields we pull. `structure` carries the pymatgen Structure; the rest
 # are training targets / metadata.
 DEFAULT_FIELDS: tuple[str, ...] = (
@@ -95,9 +104,11 @@ def fetch_structures(
     *,
     api_key: str | None = None,
     elements: Sequence[str] | None = None,
+    exclude_elements: Sequence[str] | None = None,
     num_elements: tuple[int, int] | None = None,
     num_sites_max: int | None = None,
     is_stable: bool | None = None,
+    max_energy_above_hull: float | None = None,
     limit: int | None = None,
     chunk_size: int = 1000,
     fields: Iterable[str] = DEFAULT_FIELDS,
@@ -109,9 +120,13 @@ def fetch_structures(
     Parameters
     ----------
     elements: restrict to materials containing these elements (e.g. ["Li","O"]).
+    exclude_elements: drop materials containing any of these elements (e.g.
+        RADIOACTIVE_ELEMENTS to skip radioactive chemistries).
     num_elements: (min, max) number of distinct elements.
     num_sites_max: cap on sites per unit cell (keeps graphs tractable).
     is_stable: filter to stable (True) / unstable (False) materials.
+    max_energy_above_hull: keep materials with 0 <= e_above_hull <= this value
+        (eV/atom); e.g. 0.05 selects stable + near-stable (metastable) materials.
     limit: max number of materials to fetch (None = all matching).
 
     Returns the metadata DataFrame (also written to ``mp_metadata.csv``).
@@ -126,12 +141,16 @@ def fetch_structures(
     search_kwargs: dict = {"fields": list(fields)}
     if elements is not None:
         search_kwargs["elements"] = list(elements)
+    if exclude_elements is not None:
+        search_kwargs["exclude_elements"] = list(exclude_elements)
     if num_elements is not None:
         search_kwargs["num_elements"] = tuple(num_elements)
     if num_sites_max is not None:
         search_kwargs["num_sites"] = (1, num_sites_max)
     if is_stable is not None:
         search_kwargs["is_stable"] = is_stable
+    if max_energy_above_hull is not None:
+        search_kwargs["energy_above_hull"] = (0.0, max_energy_above_hull)
     num_chunks, chunk = _resolve_chunking(limit, chunk_size)
     if num_chunks is not None:
         search_kwargs["num_chunks"] = num_chunks

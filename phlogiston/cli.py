@@ -41,12 +41,17 @@ def _cmd_gnome_info(args: argparse.Namespace) -> int:
 
 
 def _cmd_fetch_mp(args: argparse.Namespace) -> int:
+    exclude = list(args.exclude_elements or [])
+    if args.exclude_radioactive:
+        exclude = sorted(set(exclude) | set(mp.RADIOACTIVE_ELEMENTS))
     df = mp.fetch_structures(
         args.data_root,
         elements=args.elements,
+        exclude_elements=exclude or None,
         num_elements=tuple(args.num_elements) if args.num_elements else None,
         num_sites_max=args.num_sites_max,
         is_stable=(True if args.stable_only else None),
+        max_energy_above_hull=args.max_energy_above_hull,
         limit=args.limit,
         save_cif=not args.no_cif,
         force=args.force,
@@ -91,7 +96,14 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--num-sites-max", type=int, default=None,
                    help="Cap sites per unit cell (keeps graphs tractable)")
     m.add_argument("--stable-only", action="store_true",
-                   help="Only fetch thermodynamically stable materials")
+                   help="Only fetch thermodynamically stable materials (e_above_hull == 0)")
+    m.add_argument("--max-energy-above-hull", type=float, default=None,
+                   help="Keep materials with e_above_hull <= this (eV/atom); "
+                        "e.g. 0.05 for stable + near-stable")
+    m.add_argument("--exclude-elements", nargs="+", default=None,
+                   help="Drop materials containing any of these elements")
+    m.add_argument("--exclude-radioactive", action="store_true",
+                   help="Drop materials containing radioactive elements (Tc, Pm, Z>=84)")
     m.add_argument("--limit", type=int, default=None,
                    help="Max number of materials to fetch (default: all matching)")
     m.add_argument("--no-cif", action="store_true", help="Skip writing CIF files")
