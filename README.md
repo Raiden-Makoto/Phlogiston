@@ -1,8 +1,65 @@
 # Phlogiston
 
-A crystal-structure ML framework for materials discovery, pairing the **GNoME**
+A crystal-structure ML framework for materials discovery. It pairs the **GNoME**
 stable-material candidates with structural records from the **Materials Project**
-as a combined training corpus.
+into one combined training corpus, then learns to propose *new* crystals that
+hit a target property profile.
+
+## Design goal
+
+The driving use case is a (fictional) structural material that must be **light
+enough to enable flight**, **strong/tough enough to survive ~300 km/h impacts**,
+and **heat-resistant enough to survive lava**. Those requirements map onto
+concrete, learnable materials properties:
+
+| Requirement | Property target | Source / derivation |
+|---|---|---|
+| Light (flight) | density ρ | analytic from structure |
+| Survive high-speed impact | bulk `K`, shear `G`, Young's `E` | MP elasticity |
+| Resistance to breaking | Vickers hardness (Chen), fracture toughness `K_IC` (Niu), Pugh ratio G/K | derived from K, G, V |
+| Stability (is it real?) | formation energy, energy above hull | GNoME + MP + uMLIP checker |
+| Survive lava (thermal) | Debye temperature, Slack κ, sound velocities | MP + derived |
+
+Derived quantities live in `phlogiston/data/properties.py`.
+
+## Modeling stack
+
+**Philosophy: implemented from scratch.** The architectures are written in this
+repo — interaction blocks, message passing, readout heads, and the generator.
+We reuse only *low-level* primitives (equivariant math, graph/dataset utilities),
+never a prebuilt model or high-level layer.
+
+Three model roles:
+
+1. **Stability checker** — a MACE-style equivariant universal interatomic
+   potential (uMLIP). Relaxes a candidate and estimates energy above the convex
+   hull; the gate for physical realizability.
+2. **Property predictor** — a shared equivariant encoder with multi-task readout
+   heads for the targets above (moduli, hardness, toughness, Debye, κ). Equivariance
+   matters because the elastic response is tensorial.
+3. **Generator** — a property-conditioned diffusion model over lattice, fractional
+   coordinates, and atom types, to sample new candidates given a target profile.
+
+**Featurization** (built offline, no CUDA-only ops):
+
+- Periodic crystal graph via **pymatgen** (CrystalNN bonding / radius cutoff).
+- Node features: element descriptors (electronegativity, radii, valence, group/period, mass).
+- Edge features: relative position vectors + radial basis expansion + spherical harmonics.
+- Message aggregation with native `torch` scatter.
+
+**Runtime / primitives** (verified on AMD ROCm GPUs):
+
+| Layer | Choice |
+|---|---|
+| Tensor engine | PyTorch (ROCm build) |
+| Equivariant math | `e3nn` (spherical harmonics, Clebsch–Gordan tensor products) |
+| Graph containers / scatter | `torch-geometric` (pure-torch parts only; no `pyg-lib`) |
+| Structures / graph construction | `pymatgen` |
+
+> Note: PyG's compiled ops (`radius_graph`, `pyg-lib`, `torch-scatter`) are
+> intentionally avoided — they have no ROCm build. Graphs are constructed with
+> pymatgen and aggregation uses native `torch` scatter, so nothing in the model
+> path depends on a CUDA-only extension.
 
 ## Datasets
 
@@ -66,5 +123,10 @@ phlogiston/
   data/
     gnome.py                # GNoME acquisition + loading
     materials_project.py    # Materials Project structure fetcher
+    properties.py           # derived mechanical/thermal targets
   cli.py                    # `phlogiston` command-line interface
 ```
+
+Planned modules (from scratch): `data/graph.py` (featurizer),
+`models/` (equivariant encoder + stability/property heads), `generator/`
+(property-conditioned diffusion), and training/discovery drivers.
