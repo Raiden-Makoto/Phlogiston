@@ -16,6 +16,7 @@ Storage layout (mirrors the GNoME raw layout)::
 
 from __future__ import annotations
 
+import math
 import os
 import time
 from pathlib import Path
@@ -322,17 +323,24 @@ def fetch_elasticity(
         "universal_anisotropy", "debye_temperature", "density", "volume",
     ]
 
-    search_kwargs: dict = {"fields": fields}
-    if limit is not None:
-        # Only pull as much as we need (the full unchunked retrieval of all
-        # ~13k heavy docs is slow); one chunk suffices for limited/test runs.
-        search_kwargs["num_chunks"] = 1
-        search_kwargs["chunk_size"] = min(limit, 1000)
-
     with MPRester(key) as mpr:
-        print(f"[mp] querying elasticity endpoint (limit={limit}) ...")
+        # Always chunk explicitly: the fully-unchunked elasticity search returns
+        # docs with the nested moduli unpopulated (None), whereas an explicit
+        # num_chunks/chunk_size retrieval fills them in correctly.
+        chunk_size = 1000
+        if limit is not None:
+            num_chunks, chunk_size = 1, min(limit, 1000)
+        else:
+            total = _with_retries(lambda: mpr.materials.elasticity.count(),
+                                  what="elasticity count")
+            num_chunks = max(1, math.ceil(total / chunk_size))
+            print(f"[mp] elasticity records available: {total:,}")
+
+        print(f"[mp] querying elasticity (num_chunks={num_chunks}, chunk_size={chunk_size}) ...")
         docs = _with_retries(
-            lambda: mpr.materials.elasticity.search(**search_kwargs),
+            lambda: mpr.materials.elasticity.search(
+                fields=fields, num_chunks=num_chunks, chunk_size=chunk_size
+            ),
             what="elasticity search",
         )
 
