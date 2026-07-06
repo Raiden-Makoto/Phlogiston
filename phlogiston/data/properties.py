@@ -20,8 +20,6 @@ from dataclasses import dataclass
 
 H_PLANCK = 6.62607015e-34   # J*s
 K_B = 1.380649e-23          # J/K
-N_A = 6.02214076e23         # 1/mol
-AMU = 1.66053906660e-27     # kg
 
 
 def youngs_modulus(K: float, G: float) -> float:
@@ -100,19 +98,18 @@ def slack_thermal_conductivity(
     temperature: float = 300.0,
 ) -> float:
     """Lattice thermal conductivity (W/m/K) via the Slack model:
-        kappa = A(gamma) * (M_avg * theta_D^3 * delta) / (gamma^2 * n^(2/3) * T)
-    where delta is the cube root of the average atomic volume, M_avg the mean
-    atomic mass (kg), n the atoms per primitive cell. A(gamma) is the standard
-    Slack prefactor. This is the canonical high-T proxy for heat resistance."""
+        kappa = A * (M_avg * theta_D^3 * delta) / (gamma^2 * n^(2/3) * T)
+    Practical unit convention (Slack 1979; widely used in high-throughput work):
+    M_avg in amu, delta = cube-root of the average atomic volume in Angstrom,
+    theta_D and T in K, with A = 3.1e-6 giving kappa in W/m/K. This is the
+    canonical high-temperature proxy for heat resistance."""
     theta_d = debye_temperature(K, G, density, volume, n_atoms)
-    nu = poisson_ratio(K, G)
-    gamma = gruneisen(nu)
-    if not all(map(math.isfinite, (theta_d, gamma))) or gamma == 0 or n_atoms <= 0:
+    gamma = gruneisen(poisson_ratio(K, G))
+    if not all(map(math.isfinite, (theta_d, gamma, mean_mass))) or gamma == 0 or n_atoms <= 0:
         return float("nan")
-    delta = ((volume * 1e-30) / n_atoms) ** (1.0 / 3.0)      # m
-    m_avg = mean_mass * AMU                                    # kg
-    a_gamma = 2.43e-8 / (1.0 - 0.514 / gamma + 0.228 / gamma ** 2)
-    return (a_gamma * m_avg * theta_d ** 3 * delta) / (gamma ** 2 * n_atoms ** (2.0 / 3.0) * temperature)
+    delta = (volume / n_atoms) ** (1.0 / 3.0)                 # Angstrom
+    A = 3.1e-6
+    return (A * mean_mass * theta_d ** 3 * delta) / (gamma ** 2 * n_atoms ** (2.0 / 3.0) * temperature)
 
 
 @dataclass

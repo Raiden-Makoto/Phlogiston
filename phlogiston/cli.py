@@ -62,6 +62,22 @@ def _cmd_fetch_mp(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_fetch_mp_elasticity(args: argparse.Namespace) -> int:
+    df = mp.fetch_elasticity(
+        args.data_root,
+        limit=args.limit,
+        save_cif=not args.no_structures,
+        force=args.force,
+    )
+    print(f"[mp] elasticity: {len(df):,} labeled materials")
+    if len(df):
+        cols = ["material_id", "formula_pretty", "bulk_modulus_vrh",
+                "shear_modulus_vrh", "vickers_hardness", "fracture_toughness",
+                "debye_temperature", "slack_thermal_conductivity"]
+        print(df[cols].head(5).to_string())
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="phlogiston", description=__doc__)
     p.add_argument(
@@ -109,6 +125,15 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--no-cif", action="store_true", help="Skip writing CIF files")
     m.add_argument("--force", action="store_true", help="Overwrite existing CIFs")
     m.set_defaults(func=_cmd_fetch_mp)
+
+    e = sub.add_parser("fetch-mp-elasticity",
+                       help="Fetch MP elastic constants + derive mechanical/thermal labels")
+    e.add_argument("--limit", type=int, default=None,
+                   help="Max number of elasticity records to fetch")
+    e.add_argument("--no-structures", action="store_true",
+                   help="Don't download structures for elasticity materials")
+    e.add_argument("--force", action="store_true", help="Overwrite existing CIFs")
+    e.set_defaults(func=_cmd_fetch_mp_elasticity)
 
     return p
 
