@@ -32,7 +32,9 @@ WORKDIR /workspace/Phlogiston
 COPY . /workspace/Phlogiston
 
 # Install everything EXCEPT torch (provided by the ROCm base image).
-RUN grep -viE '^\s*torch' requirements.txt > /tmp/requirements.notorch.txt \
+# Exclude the bare `torch` requirement (provided by the ROCm base image) while
+# keeping siblings like torch-geometric.
+RUN grep -viE '^\s*torch\s*[><=~!]' requirements.txt > /tmp/requirements.notorch.txt \
     && pip install --no-cache-dir -r /tmp/requirements.notorch.txt \
     && pip install --no-cache-dir -e . --no-deps
 
