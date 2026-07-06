@@ -16,6 +16,9 @@ SSH_HOST="${GBT_HOST:-gbt}"                 # matches the `Host gbt` ssh config 
 REMOTE_DIR="${GBT_REMOTE_DIR:-/home/macui/Phlogiston}"
 IMAGE="${PHLOGISTON_IMAGE:-phlogiston:rocm}"
 CONTAINER="${PHLOGISTON_CONTAINER:-phlogiston}"
+# Host dir persisted across container runs and mounted at the repo's data/ dir
+# (datasets are large; we don't want to re-download them every session).
+DATA_DIR="${GBT_DATA_DIR:-/home/macui/phlogiston-data}"
 LOCAL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 sync() {
@@ -54,12 +57,13 @@ run() {
     resolve_pat
     # Ship the PAT to the box in a 0600 env-file (removed after the session),
     # then pass it into the container so git can auth over HTTPS.
-    ssh "${SSH_HOST}" "umask 077 && printf 'GITHUB_PAT=%s\n' '${GITHUB_PAT}' > ~/.phlogiston.env"
+    ssh "${SSH_HOST}" "umask 077 && printf 'GITHUB_PAT=%s\n' '${GITHUB_PAT}' > ~/.phlogiston.env && mkdir -p '${DATA_DIR}'"
     # Pass the host's numeric render/video GIDs (names don't reliably map) so
     # the container can access /dev/kfd and /dev/dri.
     ssh -t "${SSH_HOST}" 'docker run -it --rm \
         --name '"${CONTAINER}"' \
         --env-file ~/.phlogiston.env \
+        -v '"${DATA_DIR}"':/workspace/Phlogiston/data \
         --device=/dev/kfd --device=/dev/dri \
         --group-add=$(getent group render | cut -d: -f3) \
         --group-add=$(getent group video | cut -d: -f3) \
