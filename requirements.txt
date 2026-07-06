@@ -15,5 +15,10 @@ pyyaml>=6.0
 pymatgen>=2024.5.1        # crystal structures, CIF parsing, neighbor graphs
 mp-api>=0.41.2            # Materials Project structural records
 
+# ML primitives (verified on ROCm/MI350X). We use these ONLY for low-level
+# equivariant math and graph containers -- models are implemented from scratch.
+e3nn>=0.5                 # spherical harmonics, Clebsch-Gordan tensor products
+torch-geometric>=2.6      # Data/Batch containers + pure-torch scatter (no pyg-lib)
+
 # Optional: plotting for evaluation curves
 matplotlib>=3.8
