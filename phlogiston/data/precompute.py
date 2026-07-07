@@ -139,9 +139,20 @@ def _featurize_one(task: dict, data_root: str, cutoff: float,
                 return {"id": task["id"], "error": "cif-not-in-zip"}
             struct = Structure.from_str(zf.read(member).decode(), fmt="cif")
 
-        # guard against pathological giant cells that would blow memory
-        if len(struct) > max_atoms:
-            return {"id": task["id"], "error": f"too-many-atoms({len(struct)})"}
+        # guard against pathological cells that would blow memory:
+        #  - too many atoms
+        #  - tiny/degenerate cell -> a 6 A cutoff spans huge numbers of periodic
+        #    images, so the neighbor list explodes to millions of edges (OOM).
+        import math
+        n = len(struct)
+        if n > max_atoms:
+            return {"id": task["id"], "error": f"too-many-atoms({n})"}
+        vol = float(struct.volume)
+        if vol <= 1e-3:
+            return {"id": task["id"], "error": "nonpositive-volume"}
+        est_edges = n * (4.0 / 3.0) * math.pi * cutoff ** 3 * (n / vol)
+        if est_edges > 3_000_000:
+            return {"id": task["id"], "error": f"edge-explosion(~{int(est_edges)})"}
 
         labels = dict(task["labels"])
         labels["density"] = float(struct.density)   # analytic, always present
@@ -192,37 +203,45 @@ def featurize_all(data_root: str | Path = "data", *, sources=("mp", "gnome"),
     print(f"[featurize] {len(tasks):,} to do ({len(done_ids):,} already done); "
           f"workers={workers}, shard_size={shard_size}")
 
-    existing_shards = list(shard_dir(data_root).glob("shard_*.pt"))
-    shard_idx = len(existing_shards)
+    state = {"shard_idx": len(list(shard_dir(data_root).glob("shard_*.pt"))),
+             "ok": 0, "err": 0}
     buf: list[dict] = []
-    n_ok = n_err = 0
-
-    def flush(idx: int):
-        if not buf:
-            return
-        torch.save(buf, shard_dir(data_root) / f"shard_{idx:06d}.pt")
+    buf_manifest: list[str] = []
 
     worker = partial(_featurize_one, data_root=data_root, cutoff=cutoff)
     with open(mpath, "a") as mf, ProcessPoolExecutor(
         max_workers=workers, initializer=_init_worker,
         max_tasks_per_child=2000) as ex:
-        # map with chunksize streams results without materializing millions of
-        # Future objects (matters at ~629k tasks).
-        for res in tqdm(ex.map(worker, tasks, chunksize=64),
-                        total=len(tasks), desc="[featurize]"):
-            if res is None or "error" in res:
-                n_err += 1
-                continue
-            buf.append(res)
-            mf.write(json.dumps({"id": res["id"], "source": res["source"],
-                                 "shard": shard_idx, "y": res["y"],
-                                 "mask": res["mask"]}) + "\n")
-            n_ok += 1
-            if len(buf) >= shard_size:
-                flush(shard_idx)
-                buf = []
-                shard_idx += 1
-        flush(shard_idx)
 
-    print(f"[featurize] done: {n_ok:,} graphs, {n_err:,} errors -> {shard_dir(data_root)}")
-    return {"ok": n_ok, "errors": n_err, "shards": shard_idx + 1}
+        def flush():
+            # write the shard first, then its manifest lines -> the two stay
+            # consistent even if we crash between shards (resumable).
+            if not buf:
+                return
+            torch.save(buf, shard_dir(data_root) / f"shard_{state['shard_idx']:06d}.pt")
+            mf.writelines(buf_manifest)
+            mf.flush()
+            state["shard_idx"] += 1
+            buf.clear()
+            buf_manifest.clear()
+
+        try:
+            for res in tqdm(ex.map(worker, tasks, chunksize=64),
+                            total=len(tasks), desc="[featurize]"):
+                if res is None or "error" in res:
+                    state["err"] += 1
+                    continue
+                buf.append(res)
+                buf_manifest.append(json.dumps(
+                    {"id": res["id"], "source": res["source"],
+                     "shard": state["shard_idx"], "y": res["y"],
+                     "mask": res["mask"]}) + "\n")
+                state["ok"] += 1
+                if len(buf) >= shard_size:
+                    flush()
+        finally:
+            flush()  # preserve partial progress even on a pool failure
+
+    print(f"[featurize] done: {state['ok']:,} graphs, {state['err']:,} errors "
+          f"-> {shard_dir(data_root)}")
+    return {"ok": state["ok"], "errors": state["err"], "shards": state["shard_idx"]}
