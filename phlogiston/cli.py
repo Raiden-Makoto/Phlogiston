@@ -104,6 +104,26 @@ def _cmd_featurize(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_train(args: argparse.Namespace) -> int:
+    from phlogiston.train import train
+
+    train(
+        args.data_root,
+        stage=args.stage,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        encoder_lr=args.encoder_lr,
+        mul=args.mul,
+        n_layers=args.n_layers,
+        correlation=args.correlation,
+        max_shards=args.max_shards,
+        out_dir=args.out_dir,
+        init_ckpt=args.init_ckpt,
+    )
+    return 0
+
+
 def _cmd_datasets_summary(args: argparse.Namespace) -> int:
     import zipfile
 
@@ -278,6 +298,26 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "datasets-summary", help="Print label coverage across GNoME + MP datasets"
     ).set_defaults(func=_cmd_datasets_summary)
+
+    tr = sub.add_parser("train", help="Train the predictor (schedule B)")
+    tr.add_argument("--stage", type=int, default=1, choices=[1, 2])
+    tr.add_argument("--epochs", type=int, default=10)
+    tr.add_argument("--batch-size", type=int, default=64)
+    tr.add_argument("--lr", type=float, default=1e-3)
+    tr.add_argument(
+        "--encoder-lr", type=float, default=1e-4, help="Encoder LR in stage 2 (fine-tune)"
+    )
+    tr.add_argument("--mul", type=int, default=128)
+    tr.add_argument("--n-layers", type=int, default=2)
+    tr.add_argument("--correlation", type=int, default=3)
+    tr.add_argument(
+        "--max-shards", type=int, default=None, help="Load only N shards (for quick runs)"
+    )
+    tr.add_argument("--out-dir", default="runs")
+    tr.add_argument(
+        "--init-ckpt", default=None, help="Warm-start from a checkpoint (e.g. stage-1 -> stage-2)"
+    )
+    tr.set_defaults(func=_cmd_train)
 
     return p
 
