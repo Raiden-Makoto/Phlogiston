@@ -51,6 +51,60 @@ Rationale: higher body order (`ν=3` → up to 4-body messages) lets MACE match
 deeper nets with only `T=2` layers; `L_feat=2` keeps rank-2 (needed for
 tensorial elastic response) at modest cost; `L_sh=3` enriches the angular basis.
 
+## 2.5 Assembly skeleton (forward pass)
+
+Concrete structure with `T=2`, `mul=128`, `L_feat=2`, `L_sh=3`, `ν=3`.
+
+```
+inputs: z[N], edge_index[2,E], edge_vec[E,3], edge_len[E], batch[N]
+
+Y   = Spherical(edge_vec)                 # [E, 1x0e+1x1o+1x2e+1x3o]   (computed ONCE, shared)
+h   = Embedding(z)                        # [N, 128x0e]                (scalars only at input)
+readouts = []
+
+# ── Interaction block 0 (full irreps) ──────────────────────────────
+w0  = Radial_0(edge_len)                  # [E, TP0.weight_numel]
+A   = (1/√N̄)·scatter_i TP0(h[j], Y; w0)  # A-basis
+B   = SymContract_0(A; ν=3)               # 1-,2-,3-,4-body terms
+h   = Linear_msg_0(B) + Skip_0(z, h)      # -> pre-gate irreps
+h   = Gate_0(h)                           # [N, 128x0e+128x1o+128x2e]  = H
+readouts += Readout_0(scalar(h))          # [N,1]
+
+# ── Interaction block 1 (LAST: scalar output, no gate) ─────────────
+w1  = Radial_1(edge_len)
+A   = (1/√N̄)·scatter_i TP1(h[j], Y; w1)
+B   = SymContract_1(A; ν=3)
+h   = Linear_msg_1(B) + Skip_1(z, h)      # -> [N, 128x0e]  (scalars only)
+readouts += Readout_1(scalar(h))          # [N,1]
+
+E_atom = Σ_t readouts[t]                   # [N]  (MACE energy path; heads pool)
+return  h (final node scalars), per-layer readouts, E_atom
+```
+
+### Layer inventory
+| Component | Count | Notes |
+|---|---|---|
+| `Spherical` | 1 (shared) | computed once from `edge_vec` |
+| `Embedding` | 1 | `z → 128x0e` |
+| Interaction block | `T = 2` | each owns its own `Radial`, `TP`, `SymContract`, `Linear_msg`, `Skip` |
+| `Radial` MLP | 2 | **not** shared — one per interaction |
+| `Gate` | `T−1 = 1` | on every layer **except the last** |
+| `Readout` | `T = 2` | one per layer; summed for the energy path |
+
+### Irreps at each stage
+| Stage | irreps |
+|---|---|
+| `h⁰` (after embedding) | `128x0e` |
+| block 0, pre-gate | `384x0e + 128x1o + 128x2e` (128 pass-through + 256 gate scalars + gated) |
+| block 0, post-gate = `H` | `128x0e + 128x1o + 128x2e` |
+| block 1 (last), output | `128x0e` (scalars only — readout-only, cheaper) |
+| per-layer readout | `[N, 1]` |
+
+Notes: higher-ℓ features (`1o`, `2e`) are **absent at input** and first appear
+after block 0 (the TP with `Y` creates them); the **last** block collapses back
+to scalars because readouts/heads only consume invariants. `ν=1` in v1 skips the
+`SymContract` beyond the pairwise term.
+
 ## 3. Data flow (one interaction layer `t`)
 
 ### 3.1 Node embedding (t = 0) — `layers/embedding`
