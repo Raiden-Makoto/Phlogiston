@@ -52,10 +52,18 @@ def compute_normalization(dataset, indices, pred_idx: torch.Tensor):
     s = torch.zeros(t, dtype=torch.float64)
     ss = torch.zeros(t, dtype=torch.float64)
     cnt = torch.zeros(t, dtype=torch.float64)
+    # read labels directly from shard records if available (avoids rebuilding
+    # graph tensors for every training example just to grab y/mask).
+    records = getattr(dataset, "records", None)
     for i in indices:
-        _, y, m = dataset[i]
-        y = y[pred_idx].double()
-        m = m[pred_idx].double()
+        if records is not None:
+            r = records[i]
+            y = torch.tensor(r["y"], dtype=torch.float64)[pred_idx]
+            m = torch.tensor(r["mask"], dtype=torch.float64)[pred_idx]
+        else:
+            _, y, m = dataset[i]
+            y = y[pred_idx].double()
+            m = m[pred_idx].double()
         s += y * m
         ss += (y * y) * m
         cnt += m
