@@ -171,7 +171,16 @@ class ShardedCrystalDataset(Dataset):
 
     def __getitem__(self, idx: int):
         r = self.records[idx]
-        g = CrystalGraph(**r["graph"])
+        gd = r["graph"]
+        g = CrystalGraph(
+            z=torch.as_tensor(gd["z"], dtype=torch.long),
+            pos=torch.as_tensor(gd["pos"], dtype=torch.float32),
+            lattice=torch.as_tensor(gd["lattice"], dtype=torch.float32),
+            edge_index=torch.as_tensor(gd["edge_index"], dtype=torch.long),
+            edge_vec=torch.as_tensor(gd["edge_vec"], dtype=torch.float32),
+            edge_len=torch.as_tensor(gd["edge_len"], dtype=torch.float32),
+            num_nodes=int(gd["num_nodes"]),
+        )
         y = torch.tensor(r["y"], dtype=torch.float32)
         m = torch.tensor(r["mask"], dtype=torch.bool)
         return g, y, m

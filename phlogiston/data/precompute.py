@@ -158,10 +158,15 @@ def _featurize_one(task: dict, data_root: str, cutoff: float,
         labels["density"] = float(struct.density)   # analytic, always present
         g = structure_to_graph(struct, cutoff=cutoff)
         vals, mask = _vector_from_labels(labels)
+        # Return NUMPY arrays, not torch tensors: returning torch tensors from a
+        # worker triggers torch's file-descriptor storage sharing, which resets
+        # the pool (ConnectionResetError) after a few hundred results. numpy
+        # pickles normally; we convert back to torch at load time.
+        graph_np = {k: (v.numpy() if torch.is_tensor(v) else v)
+                    for k, v in g.__dict__.items()}
         return {
             "id": task["id"], "source": task["source"],
-            "graph": {k: (v if isinstance(v, int) else v) for k, v in g.__dict__.items()},
-            "y": vals, "mask": mask,
+            "graph": graph_np, "y": vals, "mask": mask,
         }
     except Exception as e:  # noqa: BLE001
         return {"id": task["id"], "error": repr(e)[:120]}
