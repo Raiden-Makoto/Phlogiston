@@ -268,25 +268,19 @@ for target profile P (light + strong + tough + heat-resistant):
 
 ```
 phlogiston/
-  data/            # DONE: gnome, materials_project, properties, graph, dataset, precompute
-  models/
-    encoder.py     # shared equivariant encoder (embeddings, interaction blocks)
-    heads.py       # stability + property readout heads
-    predictor.py   # encoder + heads assembly, masked multi-task loss
-  train/
-    stage1.py      # pretrain encoder + stability
-    stage2.py      # attach + fine-tune property heads
-    parallel.py    # TP2/TP4 setup
-  generator/            # CDVAE
-    encoder.py     # VAE encoder head on the shared equivariant encoder -> z
-    predictors.py  # num_atoms / lattice / composition (+ property) from z
-    decoder.py     # noise-conditioned score net: coord score (1o) + type logits
-    diffusion.py   # noise schedules, score-matching loss, annealed Langevin
-    cdvae.py       # assembly + training losses (KL/num/lattice/comp/coord/type)
-  discovery/
-    screen.py      # stability gate + property scoring
-    rank.py        # multi-objective ranking
+  data/          # DONE: gnome, materials_project, properties, graph, dataset, precompute
+  layers/        # reusable blocks — see layers/README.md
+                 #   radial, spherical, linear, interaction, gate, readout, embedding, noise
+  models/        # assembled models — see models/README.md
+    encoder/     #   shared E(3)-equivariant encoder        (DESIGN.md)
+    predictor/   #   encoder + stability & property heads   (DESIGN.md, schedule B)
+    cdvae/       #   ab-initio generator (VAE + predictors + score decoder) (DESIGN.md)
+  train/         # stage1 (pretrain) / stage2 (fine-tune) / parallel (TP2, max TP4)
+  discovery/     # stability gate + property screen + multi-objective ranking
 ```
+
+Detailed, per-component architecture lives in `layers/README.md` and
+`models/*/DESIGN.md` — this file stays a high-level map.
 
 ---
 
