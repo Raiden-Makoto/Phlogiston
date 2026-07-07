@@ -83,6 +83,17 @@ def _count_data_lines(path) -> int:
         return max(sum(1 for _ in f) - 1, 0)  # minus header
 
 
+def _cmd_featurize(args: argparse.Namespace) -> int:
+    from phlogiston.data import precompute
+
+    stats = precompute.featurize_all(
+        args.data_root, sources=tuple(args.sources), cutoff=args.cutoff,
+        workers=args.workers, shard_size=args.shard_size, limit=args.limit,
+    )
+    print(f"[featurize] {stats}")
+    return 0
+
+
 def _cmd_datasets_summary(args: argparse.Namespace) -> int:
     import zipfile
 
@@ -196,6 +207,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Don't download structures for elasticity materials")
     e.add_argument("--force", action="store_true", help="Overwrite existing CIFs")
     e.set_defaults(func=_cmd_fetch_mp_elasticity)
+
+    fz = sub.add_parser("featurize",
+                        help="Precompute crystal graphs for the whole corpus (CPU, sharded)")
+    fz.add_argument("--sources", nargs="+", default=["mp", "gnome"],
+                    choices=["mp", "gnome"])
+    fz.add_argument("--cutoff", type=float, default=6.0)
+    fz.add_argument("--workers", type=int, default=8,
+                    help="CPU worker processes (bounded to be shared-box friendly)")
+    fz.add_argument("--shard-size", type=int, default=4096)
+    fz.add_argument("--limit", type=int, default=None)
+    fz.set_defaults(func=_cmd_featurize)
 
     sub.add_parser("datasets-summary",
                    help="Print label coverage across GNoME + MP datasets"

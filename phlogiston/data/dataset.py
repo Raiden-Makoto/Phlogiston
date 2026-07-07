@@ -145,3 +145,33 @@ class CrystalDataset(Dataset):
         g = self._graph(entry)
         y, m = targets_to_vector(entry)
         return g, y, m
+
+
+class ShardedCrystalDataset(Dataset):
+    """Reads precomputed graph shards (see phlogiston.data.precompute).
+
+    Loads all shards into memory by default (the corpus is ~12 GB of tensors and
+    the box has ample RAM), giving fast shuffled access with the GPUs never
+    waiting on featurization.
+    """
+
+    def __init__(self, data_root: str, in_memory: bool = True):
+        from phlogiston.data.precompute import shard_dir
+
+        shards = sorted(shard_dir(data_root).glob("shard_*.pt"))
+        if not shards:
+            raise FileNotFoundError(
+                f"No shards under {shard_dir(data_root)}; run `phlogiston featurize` first.")
+        self.records: list[dict] = []
+        for s in shards:
+            self.records.extend(torch.load(s, weights_only=False))
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, idx: int):
+        r = self.records[idx]
+        g = CrystalGraph(**r["graph"])
+        y = torch.tensor(r["y"], dtype=torch.float32)
+        m = torch.tensor(r["mask"], dtype=torch.bool)
+        return g, y, m
