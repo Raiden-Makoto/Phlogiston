@@ -66,6 +66,23 @@ def compute_normalization(dataset, indices, pred_idx: torch.Tensor):
     return mean.float(), std.float()
 
 
+def _save_ckpt(path, base, stage, mean, std, epoch, opt, sched, best_val):
+    """Full checkpoint: weights + norm stats + optimizer/scheduler for resume."""
+    torch.save(
+        {
+            "model": base.state_dict(),
+            "stage": stage,
+            "mean": mean.detach().cpu(),
+            "std": std.detach().cpu(),
+            "epoch": epoch,
+            "optimizer": opt.state_dict(),
+            "scheduler": sched.state_dict(),
+            "best_val": best_val,
+        },
+        path,
+    )
+
+
 def _stage_mask(mask, stage: int):
     """Stage 1 keeps only stability columns; stage 2 keeps all."""
     if stage == 2:
@@ -78,24 +95,37 @@ def _stage_mask(mask, stage: int):
 
 @torch.no_grad()
 def evaluate(model, loader, device, stage: int = 2, distributed: bool = False):
-    """Per-target MAE (physical units) over masked entries (all-reduced if DDP)."""
+    """Return (per-target MAE dict in physical units, standardized val loss).
+
+    The scalar val loss (masked Huber in standardized space) is comparable across
+    targets and is used for best-checkpoint selection; MAEs are for reporting.
+    All quantities are all-reduced under DDP.
+    """
     model.eval()
     base = _unwrap(model)
     t = base.n_targets
     abs_err = torch.zeros(t, device=device)
     cnt = torch.zeros(t, device=device)
+    loss_sum = torch.zeros(1, device=device)
+    n_batches = torch.zeros(1, device=device)
     for batch in loader:
         batch = batch.to(device)
         pred = model(batch)
         y, mask = base.slice_targets(batch.y, batch.y_mask)
-        mask = _stage_mask(mask, stage).float()
-        abs_err += (pred - y).abs().mul(mask).sum(0)
-        cnt += mask.sum(0)
+        mask = _stage_mask(mask, stage)
+        abs_err += (pred - y).abs().mul(mask.float()).sum(0)
+        cnt += mask.float().sum(0)
+        loss, _ = base.loss(pred, y, mask)
+        loss_sum += loss.detach()
+        n_batches += 1
     if distributed:
         dist.all_reduce(abs_err)
         dist.all_reduce(cnt)
+        dist.all_reduce(loss_sum)
+        dist.all_reduce(n_batches)
     mae = (abs_err / cnt.clamp(min=1)).cpu()
-    return {k: mae[i].item() for i, k in enumerate(PREDICT_KEYS)}
+    val_loss = (loss_sum / n_batches.clamp(min=1)).item()
+    return {k: mae[i].item() for i, k in enumerate(PREDICT_KEYS)}, val_loss
 
 
 def train(
@@ -114,6 +144,7 @@ def train(
     device: str | None = None,
     out_dir: str = "runs",
     init_ckpt: str | None = None,
+    resume: str | None = None,
     seed: int = 42,
 ):
     world, rank, local = _dist_info()
@@ -140,21 +171,30 @@ def train(
         f"[train] {len(dataset):,} graphs -> train {len(tr):,} / val {len(va):,} / test {len(te):,}"
     )
 
-    model = Predictor(mul=mul, n_layers=n_layers, correlation=correlation).to(device)
-    if init_ckpt:
-        model.load_state_dict(torch.load(init_ckpt, map_location=device)["model"])
-        log(f"[train] loaded init checkpoint {init_ckpt}")
+    resume_state = torch.load(resume, map_location=device) if resume else None
 
-    # normalization: compute on rank 0, broadcast to all ranks
+    model = Predictor(mul=mul, n_layers=n_layers, correlation=correlation).to(device)
+    if resume_state is not None:
+        model.load_state_dict(resume_state["model"])
+        log(f"[train] resuming from {resume} (epoch {resume_state['epoch']})")
+    elif init_ckpt:  # warm-start weights only (e.g. stage 1 -> stage 2)
+        model.load_state_dict(torch.load(init_ckpt, map_location=device)["model"])
+        log(f"[train] warm-started from {init_ckpt}")
+
+    # normalization: from the resume checkpoint, else compute on rank 0 + broadcast
     mean = torch.zeros(model.n_targets, device=device)
     std = torch.ones(model.n_targets, device=device)
-    if is_main:
-        m0, s0 = compute_normalization(dataset, tr, model.pred_idx.cpu())
-        mean.copy_(m0.to(device))
-        std.copy_(s0.to(device))
-    if distributed:
-        dist.broadcast(mean, src=0)
-        dist.broadcast(std, src=0)
+    if resume_state is not None:
+        mean.copy_(resume_state["mean"].to(device))
+        std.copy_(resume_state["std"].to(device))
+    else:
+        if is_main:
+            m0, s0 = compute_normalization(dataset, tr, model.pred_idx.cpu())
+            mean.copy_(m0.to(device))
+            std.copy_(s0.to(device))
+        if distributed:
+            dist.broadcast(mean, src=0)
+            dist.broadcast(std, src=0)
     model.set_normalization(mean, std)
 
     base = model
@@ -166,6 +206,13 @@ def train(
     else:
         opt = torch.optim.AdamW(base.stage2_param_groups(encoder_lr, lr), weight_decay=weight_decay)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
+
+    start_epoch, best_val = 0, float("inf")
+    if resume_state is not None:
+        opt.load_state_dict(resume_state["optimizer"])
+        sched.load_state_dict(resume_state["scheduler"])
+        start_epoch = resume_state["epoch"] + 1
+        best_val = resume_state.get("best_val", float("inf"))
 
     if distributed:
         train_sampler = DistributedSampler(Subset(dataset, tr), shuffle=True, seed=seed)
@@ -187,7 +234,10 @@ def train(
             Subset(dataset, va), batch_size=batch_size, shuffle=False, collate_fn=collate
         )
 
-    for epoch in range(epochs):
+    last_path = Path(out_dir) / f"predictor_stage{stage}_last.pt"
+    best_path = Path(out_dir) / f"predictor_stage{stage}_best.pt"
+
+    for epoch in range(start_epoch, epochs):
         if train_sampler is not None:
             train_sampler.set_epoch(epoch)
         model.train()
@@ -204,20 +254,23 @@ def train(
             running += loss.item()
             n_batches += 1
         sched.step()
-        val_mae = evaluate(model, val_loader, device, stage, distributed)
+        val_mae, val_loss = evaluate(model, val_loader, device, stage, distributed)
         stab = ", ".join(f"{k.split('_')[0]}={val_mae[k]:.3f}" for k in STABILITY_KEYS)
+        improved = val_loss < best_val
+        if improved:
+            best_val = val_loss
         log(
             f"[train] epoch {epoch + 1}/{epochs} loss={running / max(n_batches, 1):.4f} "
-            f"val_MAE({stab}) {time.time() - t0:.1f}s"
+            f"val_loss={val_loss:.4f}{' *' if improved else ''} val_MAE({stab}) "
+            f"{time.time() - t0:.1f}s"
         )
+        if is_main:  # per-epoch resumable checkpoint (+ best-by-val-loss)
+            _save_ckpt(last_path, base, stage, mean, std, epoch, opt, sched, best_val)
+            if improved:
+                _save_ckpt(best_path, base, stage, mean, std, epoch, opt, sched, best_val)
 
-    ckpt = Path(out_dir) / f"predictor_stage{stage}.pt"
     if is_main:
-        torch.save(
-            {"model": base.state_dict(), "stage": stage, "mean": mean.cpu(), "std": std.cpu()},
-            ckpt,
-        )
-        log(f"[train] saved {ckpt}")
+        log(f"[train] done. last={last_path} best={best_path} (best_val={best_val:.4f})")
     if distributed:
         dist.destroy_process_group()
-    return str(ckpt)
+    return str(best_path)

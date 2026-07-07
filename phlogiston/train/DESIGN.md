@@ -54,8 +54,11 @@ shards ──► ShardedCrystalDataset ──► split(train/val/test)
 - **Optimizer**: AdamW; **schedule**: cosine annealing over `epochs`.
 - **Eval**: `evaluate()` returns per-target **MAE in physical units** over masked
   val entries (all-reduced across ranks under DDP).
-- **Checkpoint**: rank 0 saves `{model state, stage, mean, std}` to
-  `out_dir/predictor_stage{N}.pt`.
+- **Checkpoint**: rank 0 saves a **per-epoch** `_last.pt` and a **best-by-val-loss**
+  `_best.pt` under `out_dir/predictor_stage{N}_{last,best}.pt`. Each contains
+  `{model, stage, mean, std, epoch, optimizer, scheduler, best_val}` — enough to
+  **resume** mid-training (`--resume`). `--init-ckpt` instead warm-starts weights
+  only (for stage 1 → stage 2).
 
 ## 4. Multi-GPU (data-parallel, not tensor-parallel)
 
@@ -78,7 +81,8 @@ are all-reduced, and only rank 0 logs/checkpoints. Verified across 2× MI350X.
 
 `phlogiston train` flags: `--stage {1,2}`, `--epochs`, `--batch-size`, `--lr`,
 `--encoder-lr` (stage-2 encoder LR), `--mul`, `--n-layers`, `--correlation`,
-`--max-shards`, `--out-dir`, `--init-ckpt`.
+`--max-shards`, `--out-dir`, `--init-ckpt` (warm-start weights),
+`--resume` (restore optimizer/scheduler/epoch/best and continue).
 
 Typical schedule-B run:
 ```bash
@@ -119,8 +123,7 @@ torchrun --nproc_per_node=2 -m phlogiston.cli train --stage 2 --epochs 40 \
     box RAM or add lazy per-shard loading before the full run.
   - Test-set evaluation + parity plots + stability AUC (currently only val MAE).
   - Per-target loss weights; optional `log1p` for skewed targets (predictor §6).
-  - EMA of weights; early stopping on val.
-  - **Checkpointing**: currently end-of-run only. No per-epoch / best-val
-    checkpoint, and optimizer/scheduler state is not saved, so mid-training
-    resume isn't possible yet. LR warmup also not added.
+  - EMA of weights; early stopping on val; LR warmup.
+  - (Done: per-epoch `_last` + best-by-val `_best` checkpoints with optimizer/
+    scheduler state and `--resume`.)
   - Set `avg_num_neighbors` precisely from data (currently the ~50 default).

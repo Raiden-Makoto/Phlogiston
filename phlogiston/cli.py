@@ -120,6 +120,7 @@ def _cmd_train(args: argparse.Namespace) -> int:
         max_shards=args.max_shards,
         out_dir=args.out_dir,
         init_ckpt=args.init_ckpt,
+        resume=args.resume,
     )
     return 0
 
@@ -315,7 +316,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tr.add_argument("--out-dir", default="runs")
     tr.add_argument(
-        "--init-ckpt", default=None, help="Warm-start from a checkpoint (e.g. stage-1 -> stage-2)"
+        "--init-ckpt", default=None, help="Warm-start weights only (e.g. stage-1 -> stage-2)"
+    )
+    tr.add_argument(
+        "--resume",
+        default=None,
+        help="Resume from a checkpoint (restores optimizer/scheduler/epoch/best)",
     )
     tr.set_defaults(func=_cmd_train)
 
