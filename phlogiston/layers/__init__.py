@@ -8,6 +8,9 @@ Public classes are re-exported here, so import as e.g.
 from phlogiston.layers.src.spherical import SphericalHarmonics
 from phlogiston.layers.src.radial import BesselBasis, PolynomialCutoff, RadialBasis
 from phlogiston.layers.src.embedding import AtomEmbedding
+from phlogiston.layers.src.linear import EquivariantLinear, SpeciesLinear
+from phlogiston.layers.src.gate import EquivariantGate
+from phlogiston.layers.src.readout import ScalarReadout
 
 __all__ = [
     "SphericalHarmonics",
@@ -15,4 +18,8 @@ __all__ = [
     "PolynomialCutoff",
     "RadialBasis",
     "AtomEmbedding",
+    "EquivariantLinear",
+    "SpeciesLinear",
+    "EquivariantGate",
+    "ScalarReadout",
 ]
