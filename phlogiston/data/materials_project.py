@@ -19,8 +19,8 @@ from __future__ import annotations
 import math
 import os
 import time
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Callable, Sequence
 
 import pandas as pd
 from tqdm import tqdm
@@ -32,8 +32,19 @@ API_KEY_ENV_VARS = ("MP54AC", "MP_API_KEY", "MP_API_TOKEN")
 # elements are omitted -- they never appear in Materials Project and their
 # symbols are rejected by the API's element validation.
 RADIOACTIVE_ELEMENTS: tuple[str, ...] = (
-    "Tc", "Pm",
-    "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu",
+    "Tc",
+    "Pm",
+    "Po",
+    "At",
+    "Rn",
+    "Fr",
+    "Ra",
+    "Ac",
+    "Th",
+    "Pa",
+    "U",
+    "Np",
+    "Pu",
 )
 
 # Summary fields we pull. `structure` carries the pymatgen Structure; the rest
@@ -115,14 +126,17 @@ def _batches(seq: Sequence, size: int):
         yield seq[i : i + size]
 
 
-def _download_structures(mpr, material_ids, cifs: Path, structure_batch: int = 500,
-                         force: bool = False) -> int:
+def _download_structures(
+    mpr, material_ids, cifs: Path, structure_batch: int = 500, force: bool = False
+) -> int:
     """Download structures for ``material_ids`` in batches, writing one CIF each
     (skipping existing unless ``force``). Resumable. Returns count written."""
     todo = [m for m in material_ids if force or not (cifs / f"{m}.cif").exists()]
     have = len(material_ids) - len(todo)
-    print(f"[mp] structures: {len(todo):,} to fetch ({have:,} already on disk), "
-          f"batch={structure_batch}")
+    print(
+        f"[mp] structures: {len(todo):,} to fetch ({have:,} already on disk), "
+        f"batch={structure_batch}"
+    )
     written = 0
     with tqdm(total=len(todo), desc="[mp] structures") as bar:
         for batch in _batches(todo, structure_batch):
@@ -247,11 +261,14 @@ def fetch_structures(
 
         # --- Phase 2: structures (batched, resumable) -------------------
         print("[mp] phase 2/2: downloading structures")
-        written = _download_structures(mpr, df["material_id"].tolist(), cifs,
-                                       structure_batch, force)
+        written = _download_structures(
+            mpr, df["material_id"].tolist(), cifs, structure_batch, force
+        )
 
-    print(f"[mp] wrote {written:,} new CIFs (total on disk: "
-          f"{len(list(cifs.glob('*.cif'))):,}) -> {cifs}")
+    print(
+        f"[mp] wrote {written:,} new CIFs (total on disk: "
+        f"{len(list(cifs.glob('*.cif'))):,}) -> {cifs}"
+    )
     return df
 
 
@@ -279,13 +296,26 @@ def elasticity_path(data_root: str | Path) -> Path:
 
 # Columns of mp_elasticity.csv: raw MP fields + derived mechanical/thermal targets.
 _ELASTIC_COLUMNS: tuple[str, ...] = (
-    "material_id", "formula_pretty", "nsites", "density", "volume",
-    "bulk_modulus_vrh", "shear_modulus_vrh", "poisson_mp",
-    "universal_anisotropy", "debye_temperature_mp",
+    "material_id",
+    "formula_pretty",
+    "nsites",
+    "density",
+    "volume",
+    "bulk_modulus_vrh",
+    "shear_modulus_vrh",
+    "poisson_mp",
+    "universal_anisotropy",
+    "debye_temperature_mp",
     # derived (phlogiston.data.properties)
-    "youngs_modulus", "poisson_ratio", "pugh_ratio", "vickers_hardness",
-    "fracture_toughness", "debye_temperature", "sound_velocity_mean",
-    "gruneisen", "slack_thermal_conductivity",
+    "youngs_modulus",
+    "poisson_ratio",
+    "pugh_ratio",
+    "vickers_hardness",
+    "fracture_toughness",
+    "debye_temperature",
+    "sound_velocity_mean",
+    "gruneisen",
+    "slack_thermal_conductivity",
 )
 
 
@@ -318,9 +348,17 @@ def fetch_elasticity(
 
     # NB: young_modulus is not a queryable elasticity field; we derive it.
     fields = [
-        "material_id", "formula_pretty", "nsites", "elements",
-        "bulk_modulus", "shear_modulus", "homogeneous_poisson",
-        "universal_anisotropy", "debye_temperature", "density", "volume",
+        "material_id",
+        "formula_pretty",
+        "nsites",
+        "elements",
+        "bulk_modulus",
+        "shear_modulus",
+        "homogeneous_poisson",
+        "universal_anisotropy",
+        "debye_temperature",
+        "density",
+        "volume",
     ]
 
     with MPRester(key) as mpr:
@@ -331,8 +369,7 @@ def fetch_elasticity(
         if limit is not None:
             num_chunks, chunk_size = 1, min(limit, 1000)
         else:
-            total = _with_retries(lambda: mpr.materials.elasticity.count(),
-                                  what="elasticity count")
+            total = _with_retries(lambda: mpr.materials.elasticity.count(), what="elasticity count")
             num_chunks = max(1, math.ceil(total / chunk_size))
             print(f"[mp] elasticity records available: {total:,}")
 
@@ -395,10 +432,13 @@ def fetch_elasticity(
 
         if save_cif and len(df):
             print("[mp] fetching structures for elasticity materials")
-            written = _download_structures(mpr, df["material_id"].tolist(), cifs,
-                                           structure_batch, force)
-            print(f"[mp] fetched {written:,} new structures "
-                  f"(total on disk: {len(list(cifs.glob('*.cif'))):,})")
+            written = _download_structures(
+                mpr, df["material_id"].tolist(), cifs, structure_batch, force
+            )
+            print(
+                f"[mp] fetched {written:,} new structures "
+                f"(total on disk: {len(list(cifs.glob('*.cif'))):,})"
+            )
 
     return df
 

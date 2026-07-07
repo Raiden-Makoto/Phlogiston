@@ -28,3 +28,14 @@ phlogiston = "phlogiston.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["phlogiston*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+ignore = ["E501"]  # long comments/strings are fine; the formatter handles code
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["F401"]  # re-exports

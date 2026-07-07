@@ -34,7 +34,8 @@ def test_species_linear_equivariance():
 def test_species_selectivity():
     sl = SpeciesLinear(IN, OUT).double()
     from e3nn import o3
-    x = o3.Irreps(IN).randn(1, -1).double().repeat(2, 1)   # identical features
+
+    x = o3.Irreps(IN).randn(1, -1).double().repeat(2, 1)  # identical features
     out_a = sl(x[:1], torch.tensor([6]))
     out_b = sl(x[1:], torch.tensor([26]))
     out_a2 = sl(x[:1], torch.tensor([6]))

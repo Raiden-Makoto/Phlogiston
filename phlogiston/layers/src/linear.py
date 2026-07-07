@@ -8,8 +8,8 @@ separate equivariant linear per element, selected by atomic number.
 from __future__ import annotations
 
 import torch
-from torch import nn
 from e3nn import o3
+from torch import nn
 
 Z_MAX = 118
 
@@ -37,8 +37,13 @@ class SpeciesLinear(nn.Module):
         self.irreps_in = o3.Irreps(irreps_in)
         self.irreps_out = o3.Irreps(irreps_out)
         # external, non-shared weights: one weight vector per species.
-        self.linear = o3.Linear(self.irreps_in, self.irreps_out,
-                                shared_weights=False, internal_weights=False, biases=False)
+        self.linear = o3.Linear(
+            self.irreps_in,
+            self.irreps_out,
+            shared_weights=False,
+            internal_weights=False,
+            biases=False,
+        )
         self.weight = nn.Parameter(torch.randn(num_species, self.linear.weight_numel))
 
     def forward(self, x: torch.Tensor, z: torch.Tensor) -> torch.Tensor:

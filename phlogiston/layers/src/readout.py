@@ -8,8 +8,8 @@ Output is invariant by construction (only scalars are read).
 from __future__ import annotations
 
 import torch
-from torch import nn
 from e3nn import o3
+from torch import nn
 
 
 class ScalarReadout(nn.Module):
@@ -17,9 +17,11 @@ class ScalarReadout(nn.Module):
         super().__init__()
         self.irreps_in = o3.Irreps(irreps_in)
         # column slices of the 0e (scalar) channels
-        self._scalar_slices = [sl for (mul, ir), sl in
-                               zip(self.irreps_in, self.irreps_in.slices())
-                               if ir.l == 0 and ir.p == 1]
+        self._scalar_slices = [
+            sl
+            for (mul, ir), sl in zip(self.irreps_in, self.irreps_in.slices(), strict=False)
+            if ir.l == 0 and ir.p == 1
+        ]
         scalar_dim = sum(sl.stop - sl.start for sl in self._scalar_slices)
         assert scalar_dim > 0, "readout needs at least one 0e irrep in the input"
         self.reduce = reduce
@@ -36,9 +38,10 @@ class ScalarReadout(nn.Module):
         return torch.cat([x[:, sl] for sl in self._scalar_slices], dim=-1)
 
     def forward(self, x: torch.Tensor, batch: torch.Tensor | None = None) -> torch.Tensor:
-        r = self.mlp(self._scalars(x))                  # [N, n_out] per-atom
+        r = self.mlp(self._scalars(x))  # [N, n_out] per-atom
         if batch is None:
             return r
-        from torch_geometric.utils import scatter        # pure-torch, ROCm-safe
+        from torch_geometric.utils import scatter  # pure-torch, ROCm-safe
+
         n_graphs = int(batch.max()) + 1
         return scatter(r, batch, dim=0, dim_size=n_graphs, reduce=self.reduce)

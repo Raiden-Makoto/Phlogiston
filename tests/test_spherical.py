@@ -27,8 +27,11 @@ def test_equivariance():
 def test_shape():
     sh = SphericalHarmonics(l_max=3)
     y = sh(torch.randn(10, 3))
-    _check("output shape", y.shape == (10, sh.irreps_out.dim),
-           f"{tuple(y.shape)} vs (10,{sh.irreps_out.dim})")
+    _check(
+        "output shape",
+        y.shape == (10, sh.irreps_out.dim),
+        f"{tuple(y.shape)} vs (10,{sh.irreps_out.dim})",
+    )
 
 
 def test_l0_invariance():

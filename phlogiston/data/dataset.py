@@ -23,14 +23,14 @@ from phlogiston.data.graph import CrystalGraph, structure_to_graph
 # Canonical, fixed order of prediction targets. Density is analytic (always
 # present); the rest come from GNoME/MP and may be missing per material.
 TARGET_KEYS: tuple[str, ...] = (
-    "formation_energy_per_atom",   # stability (GNoME + MP)
-    "energy_above_hull",           # stability (MP; GNoME has decomposition E)
-    "density",                     # light-for-flight (analytic)
-    "bulk_modulus_vrh",            # strength
-    "shear_modulus_vrh",           # strength
-    "vickers_hardness",            # hardness
-    "fracture_toughness",          # resistance to breaking
-    "debye_temperature",           # thermal
+    "formation_energy_per_atom",  # stability (GNoME + MP)
+    "energy_above_hull",  # stability (MP; GNoME has decomposition E)
+    "density",  # light-for-flight (analytic)
+    "bulk_modulus_vrh",  # strength
+    "shear_modulus_vrh",  # strength
+    "vickers_hardness",  # hardness
+    "fracture_toughness",  # resistance to breaking
+    "debye_temperature",  # thermal
     "slack_thermal_conductivity",  # thermal
 )
 
@@ -55,24 +55,29 @@ def targets_to_vector(row: dict) -> tuple[torch.Tensor, torch.Tensor]:
 
 @dataclass
 class BatchedGraph:
-    z: torch.Tensor            # [Ntot] int64
-    pos: torch.Tensor          # [Ntot, 3]
-    edge_index: torch.Tensor   # [2, Etot] (global node indices)
-    edge_vec: torch.Tensor     # [Etot, 3]
-    edge_len: torch.Tensor     # [Etot]
-    batch: torch.Tensor        # [Ntot] graph id per node
-    lattice: torch.Tensor      # [B, 3, 3]
-    y: torch.Tensor            # [B, T] targets (0 where masked out)
-    y_mask: torch.Tensor       # [B, T] bool
+    z: torch.Tensor  # [Ntot] int64
+    pos: torch.Tensor  # [Ntot, 3]
+    edge_index: torch.Tensor  # [2, Etot] (global node indices)
+    edge_vec: torch.Tensor  # [Etot, 3]
+    edge_len: torch.Tensor  # [Etot]
+    batch: torch.Tensor  # [Ntot] graph id per node
+    lattice: torch.Tensor  # [B, 3, 3]
+    y: torch.Tensor  # [B, T] targets (0 where masked out)
+    y_mask: torch.Tensor  # [B, T] bool
     n_graphs: int
 
-    def to(self, device) -> "BatchedGraph":
+    def to(self, device) -> BatchedGraph:
         return BatchedGraph(
-            z=self.z.to(device), pos=self.pos.to(device),
-            edge_index=self.edge_index.to(device), edge_vec=self.edge_vec.to(device),
-            edge_len=self.edge_len.to(device), batch=self.batch.to(device),
-            lattice=self.lattice.to(device), y=self.y.to(device),
-            y_mask=self.y_mask.to(device), n_graphs=self.n_graphs,
+            z=self.z.to(device),
+            pos=self.pos.to(device),
+            edge_index=self.edge_index.to(device),
+            edge_vec=self.edge_vec.to(device),
+            edge_len=self.edge_len.to(device),
+            batch=self.batch.to(device),
+            lattice=self.lattice.to(device),
+            y=self.y.to(device),
+            y_mask=self.y_mask.to(device),
+            n_graphs=self.n_graphs,
         )
 
 
@@ -114,13 +119,13 @@ class CrystalDataset(Dataset):
     pymatgen Structure, an ``id`` (for caching), and the label fields.
     """
 
-    def __init__(self, entries: list[dict], cutoff: float = 6.0,
-                 cache_dir: str | None = None):
+    def __init__(self, entries: list[dict], cutoff: float = 6.0, cache_dir: str | None = None):
         self.entries = entries
         self.cutoff = cutoff
         self.cache_dir = cache_dir
         if cache_dir:
             import os
+
             os.makedirs(cache_dir, exist_ok=True)
 
     def __len__(self) -> int:
@@ -129,6 +134,7 @@ class CrystalDataset(Dataset):
     def _graph(self, entry: dict) -> CrystalGraph:
         if self.cache_dir:
             import os
+
             path = os.path.join(self.cache_dir, f"{entry['id']}.pt")
             if os.path.exists(path):
                 d = torch.load(path)
@@ -136,6 +142,7 @@ class CrystalDataset(Dataset):
         g = structure_to_graph(entry["loader"](), cutoff=self.cutoff)
         if self.cache_dir:
             import os
+
             path = os.path.join(self.cache_dir, f"{entry['id']}.pt")
             torch.save(g.__dict__, path)
         return g
@@ -155,15 +162,15 @@ class ShardedCrystalDataset(Dataset):
     waiting on featurization.
     """
 
-    def __init__(self, data_root: str, in_memory: bool = True,
-                 max_shards: int | None = None):
+    def __init__(self, data_root: str, in_memory: bool = True, max_shards: int | None = None):
         from phlogiston.data.precompute import shard_dir
 
         shards = sorted(shard_dir(data_root).glob("shard_*.pt"))
         if not shards:
             raise FileNotFoundError(
-                f"No shards under {shard_dir(data_root)}; run `phlogiston featurize` first.")
-        if max_shards is not None:                 # partial load (tests / quick runs)
+                f"No shards under {shard_dir(data_root)}; run `phlogiston featurize` first."
+            )
+        if max_shards is not None:  # partial load (tests / quick runs)
             shards = shards[:max_shards]
         self.records: list[dict] = []
         for s in shards:

@@ -33,8 +33,11 @@ def test_pool_sum_extensive():
     x2 = torch.cat([x[:3], x[:3]], dim=0)
     batch = torch.tensor([0, 0, 0, 1, 1, 1])
     g = ro(x2, batch)
-    _check("sum pooling: identical graphs -> equal totals",
-           torch.allclose(g[0], g[1], atol=1e-5), f"{g.squeeze().tolist()}")
+    _check(
+        "sum pooling: identical graphs -> equal totals",
+        torch.allclose(g[0], g[1], atol=1e-5),
+        f"{g.squeeze().tolist()}",
+    )
 
 
 def test_shape():

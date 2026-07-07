@@ -34,8 +34,8 @@ from __future__ import annotations
 import os
 import re
 import zipfile
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 import pandas as pd
 import requests
@@ -100,10 +100,16 @@ def download_file(url: str, dest: Path, force: bool = False) -> Path:
         resp.raise_for_status()
         total = int(resp.headers.get("content-length", remote_size or 0)) or None
         tmp = dest.with_suffix(dest.suffix + ".part")
-        with open(tmp, "wb") as fh, tqdm(
-            total=total, unit="B", unit_scale=True, unit_divisor=1024,
-            desc=f"[gnome] {dest.name}",
-        ) as bar:
+        with (
+            open(tmp, "wb") as fh,
+            tqdm(
+                total=total,
+                unit="B",
+                unit_scale=True,
+                unit_divisor=1024,
+                desc=f"[gnome] {dest.name}",
+            ) as bar,
+        ):
             for chunk in resp.iter_content(chunk_size=_CHUNK):
                 if chunk:
                     fh.write(chunk)
@@ -132,6 +138,7 @@ def download(
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """snake_case the released column names (e.g. 'Formation Energy Per Atom'
     -> 'formation_energy_per_atom')."""
+
     def norm(c: str) -> str:
         c = c.strip()
         c = re.sub(r"\s+", "_", c)
@@ -180,9 +187,7 @@ def filter_stable(
     positive value (e.g. 0.05 eV/atom) selects metastable candidates too.
     """
     if column not in df.columns:
-        raise KeyError(
-            f"Column {column!r} not found. Available: {list(df.columns)}"
-        )
+        raise KeyError(f"Column {column!r} not found. Available: {list(df.columns)}")
     return df[df[column] <= max_decomposition_energy].copy()
 
 
@@ -215,10 +220,7 @@ def read_structure_cif(
 
     with zipfile.ZipFile(zip_path) as zf:
         # Member names look like "by_id/<MaterialId>.CIF"; match on the stem.
-        candidates = [
-            n for n in zf.namelist()
-            if not n.endswith("/") and Path(n).stem == needle
-        ]
+        candidates = [n for n in zf.namelist() if not n.endswith("/") and Path(n).stem == needle]
         if not candidates:
             # Fall back to a substring match for robustness.
             candidates = [n for n in zf.namelist() if needle in n and n.lower().endswith(".cif")]

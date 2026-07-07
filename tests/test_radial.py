@@ -34,9 +34,11 @@ def test_cutoff_continuity():
     cut = PolynomialCutoff(r_max=6.0, p=6)
     just_inside = cut(torch.tensor([5.999]))
     at = cut(torch.tensor([6.0]))
-    _check("cutoff continuous -> 0 at r_max",
-           bool(at.abs().item() < 1e-6 and just_inside.item() < 1e-2),
-           f"just_inside={just_inside.item():.2e}")
+    _check(
+        "cutoff continuous -> 0 at r_max",
+        bool(at.abs().item() < 1e-6 and just_inside.item() < 1e-2),
+        f"just_inside={just_inside.item():.2e}",
+    )
 
 
 def test_bessel_finite_small_d():

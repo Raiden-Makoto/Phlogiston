@@ -6,8 +6,7 @@ runs are reproducible. See ``configs/default.yaml`` for an annotated example.
 
 from __future__ import annotations
 
-import dataclasses
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -18,8 +17,8 @@ import yaml
 class GraphConfig:
     """Crystal-graph featurization settings."""
 
-    radius: float = 8.0            # neighbor search cutoff in Angstrom
-    max_num_nbr: int = 12          # max neighbors kept per atom
+    radius: float = 8.0  # neighbor search cutoff in Angstrom
+    max_num_nbr: int = 12  # max neighbors kept per atom
     # Gaussian distance expansion of bond lengths.
     dmin: float = 0.0
     dmax: float = 8.0
@@ -30,11 +29,11 @@ class GraphConfig:
 class ModelConfig:
     """CGCNN architecture hyper-parameters."""
 
-    atom_fea_len: int = 64         # hidden atom embedding size
-    n_conv: int = 3                # number of graph-conv layers
-    h_fea_len: int = 128           # hidden size of the final MLP
-    n_h: int = 1                   # number of hidden layers in the final MLP
-    task: str = "regression"       # "regression" or "classification"
+    atom_fea_len: int = 64  # hidden atom embedding size
+    n_conv: int = 3  # number of graph-conv layers
+    h_fea_len: int = 128  # hidden size of the final MLP
+    n_h: int = 1  # number of hidden layers in the final MLP
+    task: str = "regression"  # "regression" or "classification"
 
 
 @dataclass
@@ -46,14 +45,14 @@ class TrainConfig:
     lr: float = 1e-2
     weight_decay: float = 0.0
     momentum: float = 0.9
-    optimizer: str = "adam"        # "adam" or "sgd"
+    optimizer: str = "adam"  # "adam" or "sgd"
     lr_milestones: list[int] = field(default_factory=lambda: [80])
     train_ratio: float = 0.8
     val_ratio: float = 0.1
     test_ratio: float = 0.1
     num_workers: int = 4
     seed: int = 42
-    device: str = "auto"           # "auto" | "cpu" | "cuda"
+    device: str = "auto"  # "auto" | "cpu" | "cuda"
     print_every: int = 25
 
 
@@ -80,13 +79,13 @@ class Config:
 
     # --- (de)serialization helpers ---------------------------------------
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "Config":
-        with open(path, "r") as f:
+    def from_yaml(cls, path: str | Path) -> Config:
+        with open(path) as f:
             raw = yaml.safe_load(f) or {}
         return cls.from_dict(raw)
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "Config":
+    def from_dict(cls, raw: dict[str, Any]) -> Config:
         return cls(
             data=DataConfig(**(raw.get("data") or {})),
             graph=GraphConfig(**(raw.get("graph") or {})),

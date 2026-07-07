@@ -61,24 +61,31 @@ def _vector_from_labels(labels: dict) -> tuple[list[float], list[bool]]:
             except (TypeError, ValueError):
                 pass
     mask = [bool(np.isfinite(v)) for v in vals]
-    vals = [v if m else 0.0 for v, m in zip(vals, mask)]
+    vals = [v if m else 0.0 for v, m in zip(vals, mask, strict=False)]
     return vals, mask
 
 
-def build_tasks(data_root: str | Path, sources=("mp", "gnome"),
-                limit: int | None = None) -> list[dict]:
+def build_tasks(
+    data_root: str | Path, sources=("mp", "gnome"), limit: int | None = None
+) -> list[dict]:
     """Assemble the work list: one task per structure with its label dict."""
     tasks: list[dict] = []
 
     if "mp" in sources:
         meta = pd.read_csv(mp.metadata_path(data_root))
         elas_path = mp.elasticity_path(data_root)
-        mech_keys = ["bulk_modulus_vrh", "shear_modulus_vrh", "vickers_hardness",
-                     "fracture_toughness", "debye_temperature",
-                     "slack_thermal_conductivity"]
+        mech_keys = [
+            "bulk_modulus_vrh",
+            "shear_modulus_vrh",
+            "vickers_hardness",
+            "fracture_toughness",
+            "debye_temperature",
+            "slack_thermal_conductivity",
+        ]
         # dict lookups (fast) instead of per-row .loc
         meta_map = meta.set_index("material_id")[
-            ["formation_energy_per_atom", "energy_above_hull"]].to_dict("index")
+            ["formation_energy_per_atom", "energy_above_hull"]
+        ].to_dict("index")
         elas_map: dict = {}
         if elas_path.exists():
             elas = pd.read_csv(elas_path)
@@ -90,20 +97,23 @@ def build_tasks(data_root: str | Path, sources=("mp", "gnome"),
                 continue
             labels = dict(meta_map.get(mid, {}))
             labels.update(elas_map.get(mid, {}))
-            tasks.append({"id": f"mp:{mid}", "source": "mp",
-                          "ref": str(cif), "labels": labels})
+            tasks.append({"id": f"mp:{mid}", "source": "mp", "ref": str(cif), "labels": labels})
 
     if "gnome" in sources:
         summ = gnome.load_summary(data_root, functional="pbe")
         mids = summ["materialid"].to_numpy()
         fe = summ["formation_energy_per_atom"].to_numpy()
         de = summ["decomposition_energy_per_atom"].to_numpy()
-        for mid, f, d in zip(mids, fe, de):
-            tasks.append({
-                "id": f"gnome:{mid}", "source": "gnome", "ref": str(mid),
-                # GNoME decomposition energy == distance to convex hull
-                "labels": {"formation_energy_per_atom": f, "energy_above_hull": d},
-            })
+        for mid, f, d in zip(mids, fe, de, strict=False):
+            tasks.append(
+                {
+                    "id": f"gnome:{mid}",
+                    "source": "gnome",
+                    "ref": str(mid),
+                    # GNoME decomposition energy == distance to convex hull
+                    "labels": {"formation_energy_per_atom": f, "energy_above_hull": d},
+                }
+            )
 
     if limit is not None:
         tasks = tasks[:limit]
@@ -113,7 +123,7 @@ def build_tasks(data_root: str | Path, sources=("mp", "gnome"),
 # --------------------------------------------------------------------------
 # Worker
 # --------------------------------------------------------------------------
-_ZIP_HANDLE: dict = {}   # per-process cache of the GNoME zip + member map
+_ZIP_HANDLE: dict = {}  # per-process cache of the GNoME zip + member map
 
 
 def _gnome_zip(data_root: str):
@@ -126,9 +136,9 @@ def _gnome_zip(data_root: str):
     return _ZIP_HANDLE["zf"], _ZIP_HANDLE["members"]
 
 
-def _featurize_one(task: dict, data_root: str, cutoff: float,
-                   max_atoms: int = 512) -> dict | None:
+def _featurize_one(task: dict, data_root: str, cutoff: float, max_atoms: int = 512) -> dict | None:
     from pymatgen.core import Structure
+
     try:
         if task["source"] == "mp":
             struct = Structure.from_file(task["ref"])
@@ -144,29 +154,32 @@ def _featurize_one(task: dict, data_root: str, cutoff: float,
         #  - tiny/degenerate cell -> a 6 A cutoff spans huge numbers of periodic
         #    images, so the neighbor list explodes to millions of edges (OOM).
         import math
+
         n = len(struct)
         if n > max_atoms:
             return {"id": task["id"], "error": f"too-many-atoms({n})"}
         vol = float(struct.volume)
         if vol <= 1e-3:
             return {"id": task["id"], "error": "nonpositive-volume"}
-        est_edges = n * (4.0 / 3.0) * math.pi * cutoff ** 3 * (n / vol)
+        est_edges = n * (4.0 / 3.0) * math.pi * cutoff**3 * (n / vol)
         if est_edges > 3_000_000:
             return {"id": task["id"], "error": f"edge-explosion(~{int(est_edges)})"}
 
         labels = dict(task["labels"])
-        labels["density"] = float(struct.density)   # analytic, always present
+        labels["density"] = float(struct.density)  # analytic, always present
         g = structure_to_graph(struct, cutoff=cutoff)
         vals, mask = _vector_from_labels(labels)
         # Return NUMPY arrays, not torch tensors: returning torch tensors from a
         # worker triggers torch's file-descriptor storage sharing, which resets
         # the pool (ConnectionResetError) after a few hundred results. numpy
         # pickles normally; we convert back to torch at load time.
-        graph_np = {k: (v.numpy() if torch.is_tensor(v) else v)
-                    for k, v in g.__dict__.items()}
+        graph_np = {k: (v.numpy() if torch.is_tensor(v) else v) for k, v in g.__dict__.items()}
         return {
-            "id": task["id"], "source": task["source"],
-            "graph": graph_np, "y": vals, "mask": mask,
+            "id": task["id"],
+            "source": task["source"],
+            "graph": graph_np,
+            "y": vals,
+            "mask": mask,
         }
     except Exception as e:  # noqa: BLE001
         return {"id": task["id"], "error": repr(e)[:120]}
@@ -181,15 +194,22 @@ def _init_worker():
     # pymatgen warns on nearly every CIF (rounded coords, etc.); silencing it
     # avoids flooding the log and the associated I/O throttling.
     import warnings
+
     warnings.filterwarnings("ignore")
 
 
 # --------------------------------------------------------------------------
 # Driver
 # --------------------------------------------------------------------------
-def featurize_all(data_root: str | Path = "data", *, sources=("mp", "gnome"),
-                  cutoff: float = 6.0, workers: int = 8, shard_size: int = 4096,
-                  limit: int | None = None) -> dict:
+def featurize_all(
+    data_root: str | Path = "data",
+    *,
+    sources=("mp", "gnome"),
+    cutoff: float = 6.0,
+    workers: int = 8,
+    shard_size: int = 4096,
+    limit: int | None = None,
+) -> dict:
     """Featurize the whole corpus into shards + a manifest. Resumable."""
     data_root = str(data_root)
     shard_dir(data_root).mkdir(parents=True, exist_ok=True)
@@ -205,18 +225,22 @@ def featurize_all(data_root: str | Path = "data", *, sources=("mp", "gnome"),
                     pass
 
     tasks = [t for t in build_tasks(data_root, sources, limit) if t["id"] not in done_ids]
-    print(f"[featurize] {len(tasks):,} to do ({len(done_ids):,} already done); "
-          f"workers={workers}, shard_size={shard_size}")
+    print(
+        f"[featurize] {len(tasks):,} to do ({len(done_ids):,} already done); "
+        f"workers={workers}, shard_size={shard_size}"
+    )
 
-    state = {"shard_idx": len(list(shard_dir(data_root).glob("shard_*.pt"))),
-             "ok": 0, "err": 0}
+    state = {"shard_idx": len(list(shard_dir(data_root).glob("shard_*.pt"))), "ok": 0, "err": 0}
     buf: list[dict] = []
     buf_manifest: list[str] = []
 
     worker = partial(_featurize_one, data_root=data_root, cutoff=cutoff)
-    with open(mpath, "a") as mf, ProcessPoolExecutor(
-        max_workers=workers, initializer=_init_worker,
-        max_tasks_per_child=2000) as ex:
+    with (
+        open(mpath, "a") as mf,
+        ProcessPoolExecutor(
+            max_workers=workers, initializer=_init_worker, max_tasks_per_child=2000
+        ) as ex,
+    ):
 
         def flush():
             # write the shard first, then its manifest lines -> the two stay
@@ -231,22 +255,33 @@ def featurize_all(data_root: str | Path = "data", *, sources=("mp", "gnome"),
             buf_manifest.clear()
 
         try:
-            for res in tqdm(ex.map(worker, tasks, chunksize=64),
-                            total=len(tasks), desc="[featurize]"):
+            for res in tqdm(
+                ex.map(worker, tasks, chunksize=64), total=len(tasks), desc="[featurize]"
+            ):
                 if res is None or "error" in res:
                     state["err"] += 1
                     continue
                 buf.append(res)
-                buf_manifest.append(json.dumps(
-                    {"id": res["id"], "source": res["source"],
-                     "shard": state["shard_idx"], "y": res["y"],
-                     "mask": res["mask"]}) + "\n")
+                buf_manifest.append(
+                    json.dumps(
+                        {
+                            "id": res["id"],
+                            "source": res["source"],
+                            "shard": state["shard_idx"],
+                            "y": res["y"],
+                            "mask": res["mask"],
+                        }
+                    )
+                    + "\n"
+                )
                 state["ok"] += 1
                 if len(buf) >= shard_size:
                     flush()
         finally:
             flush()  # preserve partial progress even on a pool failure
 
-    print(f"[featurize] done: {state['ok']:,} graphs, {state['err']:,} errors "
-          f"-> {shard_dir(data_root)}")
+    print(
+        f"[featurize] done: {state['ok']:,} graphs, {state['err']:,} errors "
+        f"-> {shard_dir(data_root)}"
+    )
     return {"ok": state["ok"], "errors": state["err"], "shards": state["shard_idx"]}

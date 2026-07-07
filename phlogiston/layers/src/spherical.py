@@ -23,8 +23,7 @@ class SphericalHarmonics(torch.nn.Module):
         tensor products in the interaction layer).
     """
 
-    def __init__(self, l_max: int = 3, normalize: bool = True,
-                 normalization: str = "component"):
+    def __init__(self, l_max: int = 3, normalize: bool = True, normalization: str = "component"):
         super().__init__()
         self.l_max = int(l_max)
         # irreps 1x0e + 1x1o + 1x2e + ... with the correct parities.
@@ -34,8 +33,10 @@ class SphericalHarmonics(torch.nn.Module):
 
     def forward(self, edge_vec: torch.Tensor) -> torch.Tensor:
         return o3.spherical_harmonics(
-            self.irreps_out, edge_vec,
-            normalize=self.normalize, normalization=self.normalization,
+            self.irreps_out,
+            edge_vec,
+            normalize=self.normalize,
+            normalization=self.normalization,
         )
 
     def __repr__(self) -> str:

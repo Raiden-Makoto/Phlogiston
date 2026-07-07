@@ -8,8 +8,8 @@ fixed element-descriptor seeding is off by default (encoder DESIGN §8).
 from __future__ import annotations
 
 import torch
-from torch import nn
 from e3nn import o3
+from torch import nn
 
 Z_MAX = 118  # index directly by atomic number
 

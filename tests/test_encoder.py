@@ -28,8 +28,10 @@ def _batch(n=8, dtype=torch.float32):
     ds = ShardedCrystalDataset("data", max_shards=1)
     b = collate([ds[i] for i in range(n)])
     if dtype != torch.float32:
-        b.pos = b.pos.to(dtype); b.edge_vec = b.edge_vec.to(dtype)
-        b.edge_len = b.edge_len.to(dtype); b.lattice = b.lattice.to(dtype)
+        b.pos = b.pos.to(dtype)
+        b.edge_vec = b.edge_vec.to(dtype)
+        b.edge_len = b.edge_len.to(dtype)
+        b.lattice = b.lattice.to(dtype)
     return b, len(ds)
 
 
@@ -38,10 +40,16 @@ def test_integration_real_graphs():
     enc = CrystalEncoder(mul=32, n_layers=2)
     out = enc(b)
     n = b.z.shape[0]
-    ok = (out.node_feats.shape == (n, 32) and out.graph_feats.shape == (8, 32)
-          and torch.isfinite(out.node_feats).all())
-    _check(f"encoder runs on real graphs (dataset size {size:,})", bool(ok),
-           f"node={tuple(out.node_feats.shape)} graph={tuple(out.graph_feats.shape)}")
+    ok = (
+        out.node_feats.shape == (n, 32)
+        and out.graph_feats.shape == (8, 32)
+        and torch.isfinite(out.node_feats).all()
+    )
+    _check(
+        f"encoder runs on real graphs (dataset size {size:,})",
+        bool(ok),
+        f"node={tuple(out.node_feats.shape)} graph={tuple(out.graph_feats.shape)}",
+    )
 
 
 def test_output_invariance():
@@ -65,8 +73,11 @@ def test_batch_independence():
     o1 = enc(b1).node_feats
     n0 = int((b8.batch == 0).sum())
     o8 = enc(b8).node_feats[:n0]
-    _check("first graph features independent of batch", torch.allclose(o1, o8, atol=1e-5),
-           f"maxdiff={ (o1-o8).abs().max().item():.2e}")
+    _check(
+        "first graph features independent of batch",
+        torch.allclose(o1, o8, atol=1e-5),
+        f"maxdiff={(o1 - o8).abs().max().item():.2e}",
+    )
 
 
 if __name__ == "__main__":

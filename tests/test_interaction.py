@@ -36,8 +36,9 @@ def _random_graph(n=6, e=20, seed=0, dtype=torch.float64):
 
 def _build(dtype=torch.float64, correlation=1):
     sh = SphericalHarmonics(l_max=3)
-    inter = Interaction(IRREPS_IN, sh.irreps_out, IRREPS_OUT, l_feat=2,
-                        correlation=correlation).to(dtype)
+    inter = Interaction(IRREPS_IN, sh.irreps_out, IRREPS_OUT, l_feat=2, correlation=correlation).to(
+        dtype
+    )
     return sh, inter
 
 
@@ -49,7 +50,7 @@ def _equivariance_at(correlation):
     navg = edge_index.shape[1] / n
 
     out = inter(h, edge_index, edge_len, sh(edge_vec), z, navg)
-    g = -o3.rand_matrix().to(dtype)                       # rotation + inversion
+    g = -o3.rand_matrix().to(dtype)  # rotation + inversion
     D_in = o3.Irreps(IRREPS_IN).D_from_matrix(g).to(dtype)
     D_out = o3.Irreps(IRREPS_OUT).D_from_matrix(g).to(dtype)
     h_rot = h @ D_in.T
@@ -72,7 +73,7 @@ def test_scalars_in_grow_higher_l():
     h = o3.Irreps("8x0e").randn(n, -1).double()
     out = inter(h, edge_index, edge_len, sh(edge_vec), z, edge_index.shape[1] / n)
     # the 1o block (cols 8..8+24) should be non-zero
-    l1 = out[:, 8:8 + 8 * 3]
+    l1 = out[:, 8 : 8 + 8 * 3]
     _check("scalar input -> nonzero ℓ=1 output", l1.abs().max().item() > 1e-6)
 
 
@@ -80,10 +81,15 @@ def test_shape():
     sh = SphericalHarmonics(l_max=3)
     inter = Interaction(IRREPS_IN, sh.irreps_out, IRREPS_OUT, l_feat=2)
     n, edge_index, edge_vec, edge_len, z = _random_graph(dtype=torch.float32)
-    out = inter(o3.Irreps(IRREPS_IN).randn(n, -1), edge_index, edge_len,
-                sh(edge_vec), z, edge_index.shape[1] / n)
-    _check("output shape", out.shape == (n, o3.Irreps(IRREPS_OUT).dim),
-           f"{tuple(out.shape)}")
+    out = inter(
+        o3.Irreps(IRREPS_IN).randn(n, -1),
+        edge_index,
+        edge_len,
+        sh(edge_vec),
+        z,
+        edge_index.shape[1] / n,
+    )
+    _check("output shape", out.shape == (n, o3.Irreps(IRREPS_OUT).dim), f"{tuple(out.shape)}")
 
 
 if __name__ == "__main__":

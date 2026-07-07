@@ -18,8 +18,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-H_PLANCK = 6.62607015e-34   # J*s
-K_B = 1.380649e-23          # J/K
+H_PLANCK = 6.62607015e-34  # J*s
+K_B = 1.380649e-23  # J/K
 
 
 def youngs_modulus(K: float, G: float) -> float:
@@ -57,21 +57,21 @@ def fracture_toughness(K: float, G: float, volume: float, n_atoms: int) -> float
     MPa*m^0.5."""
     if K <= 0 or G <= 0 or n_atoms <= 0:
         return float("nan")
-    v0 = (volume * 1e-30) / n_atoms                 # m^3 per atom
+    v0 = (volume * 1e-30) / n_atoms  # m^3 per atom
     g_pa, k_pa = G * 1e9, K * 1e9
-    k_ic = (v0 ** (1.0 / 6.0)) * g_pa * (k_pa / g_pa) ** 0.5   # Pa*m^0.5
-    return k_ic / 1e6                                # MPa*m^0.5
+    k_ic = (v0 ** (1.0 / 6.0)) * g_pa * (k_pa / g_pa) ** 0.5  # Pa*m^0.5
+    return k_ic / 1e6  # MPa*m^0.5
 
 
 def sound_velocities(K: float, G: float, density: float) -> tuple[float, float, float]:
     """(v_longitudinal, v_transverse, v_mean) in m/s from K, G (GPa), rho (g/cm^3)."""
-    rho = density * 1000.0                           # kg/m^3
+    rho = density * 1000.0  # kg/m^3
     if rho <= 0 or G <= 0:
         return (float("nan"),) * 3
     g_pa, k_pa = G * 1e9, K * 1e9
     v_t = math.sqrt(g_pa / rho)
     v_l = math.sqrt((k_pa + 4.0 * g_pa / 3.0) / rho)
-    v_m = (1.0 / 3.0 * (1.0 / v_l ** 3 + 2.0 / v_t ** 3)) ** (-1.0 / 3.0)
+    v_m = (1.0 / 3.0 * (1.0 / v_l**3 + 2.0 / v_t**3)) ** (-1.0 / 3.0)
     return v_l, v_t, v_m
 
 
@@ -82,7 +82,7 @@ def debye_temperature(K: float, G: float, density: float, volume: float, n_atoms
     _, _, v_m = sound_velocities(K, G, density)
     if not math.isfinite(v_m) or volume <= 0 or n_atoms <= 0:
         return float("nan")
-    V = volume * 1e-30                                # m^3
+    V = volume * 1e-30  # m^3
     number_density = 3.0 * n_atoms / (4.0 * math.pi * V)
     return (H_PLANCK / K_B) * number_density ** (1.0 / 3.0) * v_m
 
@@ -94,7 +94,12 @@ def gruneisen(poisson: float) -> float:
 
 
 def slack_thermal_conductivity(
-    K: float, G: float, density: float, volume: float, n_atoms: int, mean_mass: float,
+    K: float,
+    G: float,
+    density: float,
+    volume: float,
+    n_atoms: int,
+    mean_mass: float,
     temperature: float = 300.0,
 ) -> float:
     """Lattice thermal conductivity (W/m/K) via the Slack model:
@@ -107,9 +112,9 @@ def slack_thermal_conductivity(
     gamma = gruneisen(poisson_ratio(K, G))
     if not all(map(math.isfinite, (theta_d, gamma, mean_mass))) or gamma == 0 or n_atoms <= 0:
         return float("nan")
-    delta = (volume / n_atoms) ** (1.0 / 3.0)                 # Angstrom
+    delta = (volume / n_atoms) ** (1.0 / 3.0)  # Angstrom
     A = 3.1e-6
-    return (A * mean_mass * theta_d ** 3 * delta) / (gamma ** 2 * n_atoms ** (2.0 / 3.0) * temperature)
+    return (A * mean_mass * theta_d**3 * delta) / (gamma**2 * n_atoms ** (2.0 / 3.0) * temperature)
 
 
 @dataclass
@@ -126,7 +131,12 @@ class DerivedProperties:
 
 
 def derive_all(
-    K: float, G: float, density: float, volume: float, n_atoms: int, mean_mass: float,
+    K: float,
+    G: float,
+    density: float,
+    volume: float,
+    n_atoms: int,
+    mean_mass: float,
 ) -> DerivedProperties:
     """Compute the full derived-property set from K, G and cell geometry."""
     _, _, v_m = sound_velocities(K, G, density)

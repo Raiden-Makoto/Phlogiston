@@ -16,9 +16,17 @@ import torch
 from e3nn import o3
 
 
-def assert_equivariant(f, irreps_in, irreps_out, *, n: int = 16, atol: float = 1e-5,
-                       seed: int = 0, include_inversion: bool = True,
-                       dtype=torch.float64) -> float:
+def assert_equivariant(
+    f,
+    irreps_in,
+    irreps_out,
+    *,
+    n: int = 16,
+    atol: float = 1e-5,
+    seed: int = 0,
+    include_inversion: bool = True,
+    dtype=torch.float64,
+) -> float:
     """Assert ``f`` is equivariant from ``irreps_in`` to ``irreps_out``.
 
     ``f`` takes a tensor ``[n, irreps_in.dim]`` (e.g. edge vectors are ``1o``).
@@ -39,6 +47,6 @@ def assert_equivariant(f, irreps_in, irreps_out, *, n: int = 16, atol: float = 1
     y_f_then_rot = f(x) @ D_out.transpose(-1, -2)
     err = (y_rot_then_f - y_f_then_rot).abs().max().item()
     assert err < atol, (
-        f"equivariance broken: max err {err:.3e} >= {atol} "
-        f"({irreps_in} -> {irreps_out})")
+        f"equivariance broken: max err {err:.3e} >= {atol} ({irreps_in} -> {irreps_out})"
+    )
     return err

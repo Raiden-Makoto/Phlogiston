@@ -25,7 +25,7 @@ def test_shape():
 
 def test_same_species_same_row():
     emb = AtomEmbedding(mul=64)
-    z = torch.tensor([26, 8, 26])            # two Fe, one O
+    z = torch.tensor([26, 8, 26])  # two Fe, one O
     h = emb(z)
     _check("identical z -> identical rows", torch.allclose(h[0], h[2]))
     _check("different z -> different rows", not torch.allclose(h[0], h[1]))

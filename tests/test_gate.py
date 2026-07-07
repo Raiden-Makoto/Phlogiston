@@ -24,9 +24,11 @@ def test_equivariance():
 def test_irreps_contract():
     gate = EquivariantGate("16x0e+8x1o+4x2e")
     # input = scalars + gates + gated; output = scalars + gated
-    _check("irreps_in has gate scalars",
-           gate.irreps_in.num_irreps > gate.irreps_out.num_irreps,
-           f"in={gate.irreps_in} out={gate.irreps_out}")
+    _check(
+        "irreps_in has gate scalars",
+        gate.irreps_in.num_irreps > gate.irreps_out.num_irreps,
+        f"in={gate.irreps_in} out={gate.irreps_out}",
+    )
     _check("irreps_out keeps ℓ>0", any(ir.l > 0 for _, ir in gate.irreps_out))
 
 

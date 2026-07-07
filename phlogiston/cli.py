@@ -10,7 +10,6 @@ Phase 1 exposes dataset acquisition:
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 from phlogiston.data import gnome
 from phlogiston.data import materials_project as mp
@@ -71,9 +70,16 @@ def _cmd_fetch_mp_elasticity(args: argparse.Namespace) -> int:
     )
     print(f"[mp] elasticity: {len(df):,} labeled materials")
     if len(df):
-        cols = ["material_id", "formula_pretty", "bulk_modulus_vrh",
-                "shear_modulus_vrh", "vickers_hardness", "fracture_toughness",
-                "debye_temperature", "slack_thermal_conductivity"]
+        cols = [
+            "material_id",
+            "formula_pretty",
+            "bulk_modulus_vrh",
+            "shear_modulus_vrh",
+            "vickers_hardness",
+            "fracture_toughness",
+            "debye_temperature",
+            "slack_thermal_conductivity",
+        ]
         print(df[cols].head(5).to_string())
     return 0
 
@@ -87,8 +93,12 @@ def _cmd_featurize(args: argparse.Namespace) -> int:
     from phlogiston.data import precompute
 
     stats = precompute.featurize_all(
-        args.data_root, sources=tuple(args.sources), cutoff=args.cutoff,
-        workers=args.workers, shard_size=args.shard_size, limit=args.limit,
+        args.data_root,
+        sources=tuple(args.sources),
+        cutoff=args.cutoff,
+        workers=args.workers,
+        shard_size=args.shard_size,
+        limit=args.limit,
     )
     print(f"[featurize] {stats}")
     return 0
@@ -154,14 +164,17 @@ def _cmd_datasets_summary(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="phlogiston", description=__doc__)
     p.add_argument(
-        "--data-root", default="data",
+        "--data-root",
+        default="data",
         help="Root directory for datasets (default: ./data)",
     )
     sub = p.add_subparsers(dest="command", required=True)
 
     f = sub.add_parser("fetch-gnome", help="Download GNoME dataset files")
     f.add_argument(
-        "--keys", nargs="+", default=list(gnome.DEFAULT_KEYS),
+        "--keys",
+        nargs="+",
+        default=list(gnome.DEFAULT_KEYS),
         choices=list(gnome.GNOME_FILES),
         help=f"Which files to fetch (default: {list(gnome.DEFAULT_KEYS)})",
     )
@@ -172,56 +185,99 @@ def build_parser() -> argparse.ArgumentParser:
     g = sub.add_parser("gnome-info", help="Load the summary and print statistics")
     g.add_argument("--functional", default="pbe", choices=["pbe", "r2scan"])
     g.add_argument(
-        "--max-decomp", type=float, default=0.0,
+        "--max-decomp",
+        type=float,
+        default=0.0,
         help="Decomposition-energy threshold (eV/atom) for 'stable' count",
     )
     g.set_defaults(func=_cmd_gnome_info)
 
     m = sub.add_parser("fetch-mp", help="Download Materials Project structures + labels")
-    m.add_argument("--elements", nargs="+", default=None,
-                   help="Restrict to materials containing these elements")
-    m.add_argument("--num-elements", nargs=2, type=int, default=None,
-                   metavar=("MIN", "MAX"), help="Min/max number of distinct elements")
-    m.add_argument("--num-sites-max", type=int, default=None,
-                   help="Cap sites per unit cell (keeps graphs tractable)")
-    m.add_argument("--stable-only", action="store_true",
-                   help="Only fetch thermodynamically stable materials (e_above_hull == 0)")
-    m.add_argument("--max-energy-above-hull", type=float, default=None,
-                   help="Keep materials with e_above_hull <= this (eV/atom); "
-                        "e.g. 0.05 for stable + near-stable")
-    m.add_argument("--exclude-elements", nargs="+", default=None,
-                   help="Drop materials containing any of these elements")
-    m.add_argument("--exclude-radioactive", action="store_true",
-                   help="Drop materials containing radioactive elements (Tc, Pm, Z>=84)")
-    m.add_argument("--limit", type=int, default=None,
-                   help="Max number of materials to fetch (default: all matching)")
+    m.add_argument(
+        "--elements",
+        nargs="+",
+        default=None,
+        help="Restrict to materials containing these elements",
+    )
+    m.add_argument(
+        "--num-elements",
+        nargs=2,
+        type=int,
+        default=None,
+        metavar=("MIN", "MAX"),
+        help="Min/max number of distinct elements",
+    )
+    m.add_argument(
+        "--num-sites-max",
+        type=int,
+        default=None,
+        help="Cap sites per unit cell (keeps graphs tractable)",
+    )
+    m.add_argument(
+        "--stable-only",
+        action="store_true",
+        help="Only fetch thermodynamically stable materials (e_above_hull == 0)",
+    )
+    m.add_argument(
+        "--max-energy-above-hull",
+        type=float,
+        default=None,
+        help="Keep materials with e_above_hull <= this (eV/atom); "
+        "e.g. 0.05 for stable + near-stable",
+    )
+    m.add_argument(
+        "--exclude-elements",
+        nargs="+",
+        default=None,
+        help="Drop materials containing any of these elements",
+    )
+    m.add_argument(
+        "--exclude-radioactive",
+        action="store_true",
+        help="Drop materials containing radioactive elements (Tc, Pm, Z>=84)",
+    )
+    m.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Max number of materials to fetch (default: all matching)",
+    )
     m.add_argument("--no-cif", action="store_true", help="Skip writing CIF files")
     m.add_argument("--force", action="store_true", help="Overwrite existing CIFs")
     m.set_defaults(func=_cmd_fetch_mp)
 
-    e = sub.add_parser("fetch-mp-elasticity",
-                       help="Fetch MP elastic constants + derive mechanical/thermal labels")
-    e.add_argument("--limit", type=int, default=None,
-                   help="Max number of elasticity records to fetch")
-    e.add_argument("--no-structures", action="store_true",
-                   help="Don't download structures for elasticity materials")
+    e = sub.add_parser(
+        "fetch-mp-elasticity", help="Fetch MP elastic constants + derive mechanical/thermal labels"
+    )
+    e.add_argument(
+        "--limit", type=int, default=None, help="Max number of elasticity records to fetch"
+    )
+    e.add_argument(
+        "--no-structures",
+        action="store_true",
+        help="Don't download structures for elasticity materials",
+    )
     e.add_argument("--force", action="store_true", help="Overwrite existing CIFs")
     e.set_defaults(func=_cmd_fetch_mp_elasticity)
 
-    fz = sub.add_parser("featurize",
-                        help="Precompute crystal graphs for the whole corpus (CPU, sharded)")
-    fz.add_argument("--sources", nargs="+", default=["mp", "gnome"],
-                    choices=["mp", "gnome"])
+    fz = sub.add_parser(
+        "featurize", help="Precompute crystal graphs for the whole corpus (CPU, sharded)"
+    )
+    fz.add_argument("--sources", nargs="+", default=["mp", "gnome"], choices=["mp", "gnome"])
     fz.add_argument("--cutoff", type=float, default=6.0)
-    fz.add_argument("--workers", type=int, default=8,
-                    help="CPU worker processes (bounded to be shared-box friendly)")
+    fz.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        help="CPU worker processes (bounded to be shared-box friendly)",
+    )
     fz.add_argument("--shard-size", type=int, default=4096)
     fz.add_argument("--limit", type=int, default=None)
     fz.set_defaults(func=_cmd_featurize)
 
-    sub.add_parser("datasets-summary",
-                   help="Print label coverage across GNoME + MP datasets"
-                   ).set_defaults(func=_cmd_datasets_summary)
+    sub.add_parser(
+        "datasets-summary", help="Print label coverage across GNoME + MP datasets"
+    ).set_defaults(func=_cmd_datasets_summary)
 
     return p
 
