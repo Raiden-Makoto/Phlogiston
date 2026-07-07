@@ -1,8 +1,11 @@
 # `phlogiston.layers` — building blocks
 
 Small, self-contained, independently-testable layers. Models in
-`phlogiston.models` compose these; nothing here imports a model. Each non-trivial
-layer gets its own detailed spec file (`<layer>.md`) next to its implementation.
+`phlogiston.models` compose these; nothing here imports a model.
+
+**Layout**: implementations in `src/`, detailed specs in `docs/`. Public classes
+are re-exported from the package, so import as
+`from phlogiston.layers import SphericalHarmonics`.
 
 ## Conventions (contract every layer honors)
 
@@ -21,15 +24,15 @@ layer gets its own detailed spec file (`<layer>.md`) next to its implementation.
 
 Encoder blocks — **specs written** (`<layer>.md` beside this file); code next.
 
-| Module | Purpose | Spec |
-|---|---|---|
-| `embedding` | atomic-number embedding (+ optional element descriptors) | [embedding.md](embedding.md) ✅ |
-| `radial` | Bessel radial basis + smooth polynomial cutoff + weight MLP | [radial.md](radial.md) ✅ |
-| `spherical` | real spherical harmonics of `edge_vec` (ℓ ≤ L_sh) | [spherical.md](spherical.md) ✅ |
-| `linear` | equivariant linear (+ species-dependent skip) | [linear.md](linear.md) ✅ |
-| `interaction` | A-basis + symmetric contraction (body order ν) + message | [interaction.md](interaction.md) ✅ |
-| `gate` | gated equivariant nonlinearity (scalars gate higher ℓ) | [gate.md](gate.md) ✅ |
-| `readout` | scalar readout + graph pooling | [readout.md](readout.md) ✅ |
+| Module | Purpose | Spec | Code |
+|---|---|---|---|
+| `embedding` | atomic-number embedding (+ optional element descriptors) | [docs/embedding.md](docs/embedding.md) | `src/embedding.py` ✅ |
+| `radial` | Bessel radial basis + smooth polynomial cutoff + weight MLP | [docs/radial.md](docs/radial.md) | `src/radial.py` ✅ |
+| `spherical` | real spherical harmonics of `edge_vec` (ℓ ≤ L_sh) | [docs/spherical.md](docs/spherical.md) | `src/spherical.py` ✅ |
+| `linear` | equivariant linear (+ species-dependent skip) | [docs/linear.md](docs/linear.md) | (todo) |
+| `interaction` | A-basis + symmetric contraction (body order ν) + message | [docs/interaction.md](docs/interaction.md) | (todo) |
+| `gate` | gated equivariant nonlinearity (scalars gate higher ℓ) | [docs/gate.md](docs/gate.md) | (todo) |
+| `readout` | scalar readout + graph pooling | [docs/readout.md](docs/readout.md) | (todo) |
 
 Deferred (belongs to the CDVAE model, spec'd in that phase):
 

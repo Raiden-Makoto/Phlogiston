@@ -6,7 +6,7 @@ import sys
 
 import torch
 
-from phlogiston.layers.spherical import SphericalHarmonics
+from phlogiston.layers import SphericalHarmonics
 from tests.equivariance import assert_equivariant
 
 _results: list[tuple[str, bool, str]] = []

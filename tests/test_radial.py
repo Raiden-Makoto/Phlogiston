@@ -6,7 +6,7 @@ import sys
 
 import torch
 
-from phlogiston.layers.radial import BesselBasis, PolynomialCutoff, RadialBasis
+from phlogiston.layers import BesselBasis, PolynomialCutoff, RadialBasis
 
 _results: list[tuple[str, bool, str]] = []
 

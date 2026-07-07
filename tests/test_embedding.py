@@ -6,7 +6,7 @@ import sys
 
 import torch
 
-from phlogiston.layers.embedding import AtomEmbedding
+from phlogiston.layers import AtomEmbedding
 
 _results: list[tuple[str, bool, str]] = []
 
