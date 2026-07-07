@@ -36,10 +36,10 @@ Encoder blocks — **specs written** (`<layer>.md` beside this file); code next.
 
 CDVAE-specific blocks:
 
-| Module | Purpose | Code |
-|---|---|---|
-| `noise` | sinusoidal noise-level / timestep embedding (CDVAE decoder) | `src/noise.py` ✅ |
-| `vector_readout` | equivariant `1o` vector readout (CDVAE coord score) | `src/vector_readout.py` ✅ |
+| Module | Purpose | Spec | Code |
+|---|---|---|---|
+| `noise` | sinusoidal noise-level / timestep embedding (CDVAE decoder) | [docs/noise.md](docs/noise.md) | `src/noise.py` ✅ |
+| `vector_readout` | equivariant `1o` vector readout (CDVAE coord score) | [docs/vector_readout.md](docs/vector_readout.md) | `src/vector_readout.py` ✅ |
 
 > The precise architecture is defined per-layer in these spec files and assembled
 > in `models/encoder/DESIGN.md`, not in `pipeline.md`.
