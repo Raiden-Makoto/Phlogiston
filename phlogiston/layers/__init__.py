@@ -11,6 +11,7 @@ from phlogiston.layers.src.embedding import AtomEmbedding
 from phlogiston.layers.src.linear import EquivariantLinear, SpeciesLinear
 from phlogiston.layers.src.gate import EquivariantGate
 from phlogiston.layers.src.readout import ScalarReadout
+from phlogiston.layers.src.interaction import Interaction
 
 __all__ = [
     "SphericalHarmonics",
@@ -22,4 +23,5 @@ __all__ = [
     "SpeciesLinear",
     "EquivariantGate",
     "ScalarReadout",
+    "Interaction",
 ]

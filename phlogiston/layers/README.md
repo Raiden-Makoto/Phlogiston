@@ -30,7 +30,7 @@ Encoder blocks — **specs written** (`<layer>.md` beside this file); code next.
 | `radial` | Bessel radial basis + smooth polynomial cutoff + weight MLP | [docs/radial.md](docs/radial.md) | `src/radial.py` ✅ |
 | `spherical` | real spherical harmonics of `edge_vec` (ℓ ≤ L_sh) | [docs/spherical.md](docs/spherical.md) | `src/spherical.py` ✅ |
 | `linear` | equivariant linear (+ species-dependent skip) | [docs/linear.md](docs/linear.md) | `src/linear.py` ✅ |
-| `interaction` | A-basis + symmetric contraction (body order ν) + message | [docs/interaction.md](docs/interaction.md) | (todo) |
+| `interaction` | A-basis + symmetric contraction (body order ν) + message | [docs/interaction.md](docs/interaction.md) | `src/interaction.py` (v1 ν=1 ✅; v2 sym-contraction todo) |
 | `gate` | gated equivariant nonlinearity (scalars gate higher ℓ) | [docs/gate.md](docs/gate.md) | `src/gate.py` ✅ |
 | `readout` | scalar readout + graph pooling | [docs/readout.md](docs/readout.md) | `src/readout.py` ✅ |
 
