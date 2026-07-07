@@ -126,7 +126,8 @@ def _gnome_zip(data_root: str):
     return _ZIP_HANDLE["zf"], _ZIP_HANDLE["members"]
 
 
-def _featurize_one(task: dict, data_root: str, cutoff: float) -> dict | None:
+def _featurize_one(task: dict, data_root: str, cutoff: float,
+                   max_atoms: int = 512) -> dict | None:
     from pymatgen.core import Structure
     try:
         if task["source"] == "mp":
@@ -137,6 +138,10 @@ def _featurize_one(task: dict, data_root: str, cutoff: float) -> dict | None:
             if member is None:
                 return {"id": task["id"], "error": "cif-not-in-zip"}
             struct = Structure.from_str(zf.read(member).decode(), fmt="cif")
+
+        # guard against pathological giant cells that would blow memory
+        if len(struct) > max_atoms:
+            return {"id": task["id"], "error": f"too-many-atoms({len(struct)})"}
 
         labels = dict(task["labels"])
         labels["density"] = float(struct.density)   # analytic, always present
@@ -199,7 +204,8 @@ def featurize_all(data_root: str | Path = "data", *, sources=("mp", "gnome"),
 
     worker = partial(_featurize_one, data_root=data_root, cutoff=cutoff)
     with open(mpath, "a") as mf, ProcessPoolExecutor(
-        max_workers=workers, initializer=_init_worker) as ex:
+        max_workers=workers, initializer=_init_worker,
+        max_tasks_per_child=2000) as ex:
         # map with chunksize streams results without materializing millions of
         # Future objects (matters at ~629k tasks).
         for res in tqdm(ex.map(worker, tasks, chunksize=64),
