@@ -28,14 +28,17 @@ RUN git config --system credential.helper \
 
 WORKDIR /workspace/Phlogiston
 
-# Copy the repo (including .git, so `git pull` works inside the container).
-COPY . /workspace/Phlogiston
-
-# Install everything EXCEPT torch (provided by the ROCm base image).
+# Install deps FIRST from requirements.txt only, so this layer is cached across
+# code changes (only a requirements.txt edit busts it -> fast iterative builds).
 # Exclude the bare `torch` requirement (provided by the ROCm base image) while
 # keeping siblings like torch-geometric.
+COPY requirements.txt /workspace/Phlogiston/requirements.txt
 RUN grep -viE '^\s*torch\s*[><=~!]' requirements.txt > /tmp/requirements.notorch.txt \
-    && pip install --no-cache-dir -r /tmp/requirements.notorch.txt \
-    && pip install --no-cache-dir -e . --no-deps
+    && pip install --no-cache-dir -r /tmp/requirements.notorch.txt
+
+# Then copy the repo (including .git, so `git pull` works inside the container)
+# and register the editable package (fast; this is all a code change re-runs).
+COPY . /workspace/Phlogiston
+RUN pip install --no-cache-dir -e . --no-deps
 
 CMD ["/bin/bash"]
