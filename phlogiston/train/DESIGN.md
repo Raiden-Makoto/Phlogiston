@@ -88,7 +88,29 @@ torchrun --nproc_per_node=2 -m phlogiston.cli train --stage 2 --epochs 40 \
     --init-ckpt runs/predictor_stage1.pt --encoder-lr 1e-4 --lr 1e-3 --out-dir runs
 ```
 
-## 6. Status & open items
+## 6. Design rationale (why these choices)
+
+- **AdamW over Adam**: AdamW *decouples* weight decay from the adaptive step
+  (plain Adam folds L2 into the moment estimate, scaling decay per-parameter and
+  breaking proper regularization). Correct decay matters most in Stage 2, where
+  we fine-tune on only ~12k labels and overfitting is a real risk.
+- **Huber loss (smooth-L1)** over MSE/MAE: quadratic near zero (precise, smooth
+  gradients) but linear for large errors (bounded gradient → robust to the
+  outlier/noisy DFT labels materials data contains). Computed in standardized
+  space so `delta=1.0` ≈ 1 std. MSE would let outliers dominate; L1 is
+  non-smooth at 0 and converges less precisely.
+- **Target standardization (train-split only)**: puts energies (eV), moduli
+  (GPa), κ (W/m/K) on comparable scales so the multi-task loss is balanced and
+  no unit dominates; train-only avoids val/test leakage. Predictions are
+  de-standardized to physical units at inference.
+- **Cosine-annealing LR**: smooth decay without manual step milestones (warmup
+  not yet added).
+- **Checkpoint contents**: model state + `stage` + `mean`/`std`. The norm stats
+  are saved *with* the weights because they are required to de-standardize
+  outputs — a checkpoint without them yields wrong physical predictions. Rank-0
+  only, unwrapped (non-DDP) state so it loads for single- or multi-GPU.
+
+## 7. Status & open items
 
 - **Done & smoke-validated** (tiny subset, 1–2 GPUs): loop runs end-to-end, loss
   and MAE decrease, DDP works. **No real training run yet** (no trained model).
@@ -98,4 +120,7 @@ torchrun --nproc_per_node=2 -m phlogiston.cli train --stage 2 --epochs 40 \
   - Test-set evaluation + parity plots + stability AUC (currently only val MAE).
   - Per-target loss weights; optional `log1p` for skewed targets (predictor §6).
   - EMA of weights; early stopping on val.
+  - **Checkpointing**: currently end-of-run only. No per-epoch / best-val
+    checkpoint, and optimizer/scheduler state is not saved, so mid-training
+    resume isn't possible yet. LR warmup also not added.
   - Set `avg_num_neighbors` precisely from data (currently the ~50 default).
