@@ -123,6 +123,35 @@ def test_supercell_periodicity():
           f"E_prim={g0.edge_len.shape[0]} E_super={g1.edge_len.shape[0]}")
 
 
+def test_batching_and_masks():
+    from phlogiston.data.dataset import TARGET_KEYS, collate, targets_to_vector
+    g_al = structure_to_graph(fcc_al(), cutoff=5.0)
+    g_na = structure_to_graph(nacl(), cutoff=5.0)
+    # partial labels: one has moduli, the other only stability
+    y1, m1 = targets_to_vector({"formation_energy_per_atom": -0.5, "density": 2.7,
+                                "bulk_modulus_vrh": 76.0})
+    y2, m2 = targets_to_vector({"formation_energy_per_atom": -2.0})
+    b = collate([(g_al, y1, m1), (g_na, y2, m2)])
+
+    n_tot = g_al.num_nodes + g_na.num_nodes
+    e_tot = g_al.edge_index.shape[1] + g_na.edge_index.shape[1]
+    check("batch node/edge totals", b.z.shape[0] == n_tot and b.edge_index.shape[1] == e_tot)
+    # batch vector assigns first block to 0, second to 1
+    check("batch vector correct",
+          bool(np.all(b.batch.numpy()[:g_al.num_nodes] == 0) and
+               np.all(b.batch.numpy()[g_al.num_nodes:] == 1)))
+    # edge_index of 2nd graph must be offset by num_nodes of 1st and stay in range
+    off = g_al.edge_index.shape[1]
+    second = b.edge_index[:, off:].numpy()
+    check("edge_index offset in range",
+          bool(second.min() >= g_al.num_nodes and second.max() < n_tot))
+    # mask: bulk modulus present for graph 0 only
+    bidx = TARGET_KEYS.index("bulk_modulus_vrh")
+    check("mask marks present/absent labels",
+          bool(b.y_mask[0, bidx] and not b.y_mask[1, bidx]))
+    check("masked-out target value is zero", float(b.y[1, bidx]) == 0.0)
+
+
 def test_real_cifs():
     files = sorted(glob.glob("data/raw/mp/cifs/*.cif"))[:200]
     if not files:
@@ -146,6 +175,7 @@ if __name__ == "__main__":
     test_translation_invariance()
     test_rotation_equivariance()
     test_supercell_periodicity()
+    test_batching_and_masks()
     test_real_cifs()
     n_fail = sum(1 for _, s, _ in results if s == FAIL)
     print(f"\n{'='*50}\n{len(results)-n_fail}/{len(results)} checks passed")

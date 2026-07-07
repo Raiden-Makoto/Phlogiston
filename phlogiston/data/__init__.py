@@ -7,5 +7,8 @@ featurization.
 
 from phlogiston.data import gnome
 from phlogiston.data import materials_project
+from phlogiston.data import properties
+from phlogiston.data import graph
+from phlogiston.data import dataset
 
-__all__ = ["gnome", "materials_project"]
+__all__ = ["gnome", "materials_project", "properties", "graph", "dataset"]
