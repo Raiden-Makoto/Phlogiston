@@ -9,9 +9,11 @@ from phlogiston.layers.src.embedding import AtomEmbedding
 from phlogiston.layers.src.gate import EquivariantGate
 from phlogiston.layers.src.interaction import Interaction, SymmetricContraction
 from phlogiston.layers.src.linear import EquivariantLinear, SpeciesLinear
+from phlogiston.layers.src.noise import NoiseEmbedding
 from phlogiston.layers.src.radial import BesselBasis, PolynomialCutoff, RadialBasis
 from phlogiston.layers.src.readout import ScalarReadout
 from phlogiston.layers.src.spherical import SphericalHarmonics
+from phlogiston.layers.src.vector_readout import EquivariantVectorReadout
 
 __all__ = [
     "SphericalHarmonics",
@@ -25,4 +27,6 @@ __all__ = [
     "ScalarReadout",
     "Interaction",
     "SymmetricContraction",
+    "NoiseEmbedding",
+    "EquivariantVectorReadout",
 ]

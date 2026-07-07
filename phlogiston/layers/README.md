@@ -34,11 +34,12 @@ Encoder blocks — **specs written** (`<layer>.md` beside this file); code next.
 | `gate` | gated equivariant nonlinearity (scalars gate higher ℓ) | [docs/gate.md](docs/gate.md) | `src/gate.py` ✅ |
 | `readout` | scalar readout + graph pooling | [docs/readout.md](docs/readout.md) | `src/readout.py` ✅ |
 
-Deferred (belongs to the CDVAE model, spec'd in that phase):
+CDVAE-specific blocks:
 
-| Module | Purpose | Spec |
+| Module | Purpose | Code |
 |---|---|---|
-| `noise` | noise-level / timestep embedding (CDVAE decoder) | (deferred) |
+| `noise` | sinusoidal noise-level / timestep embedding (CDVAE decoder) | `src/noise.py` ✅ |
+| `vector_readout` | equivariant `1o` vector readout (CDVAE coord score) | `src/vector_readout.py` ✅ |
 
 > The precise architecture is defined per-layer in these spec files and assembled
 > in `models/encoder/DESIGN.md`, not in `pipeline.md`.
