@@ -51,7 +51,10 @@ shards ──► ShardedCrystalDataset ──► split(train/val/test)
 
 - **Loss**: `Predictor.loss` — masked multi-task Huber in standardized space
   (per-target mean over present labels).
-- **Optimizer**: AdamW; **schedule**: cosine annealing over `epochs`.
+- **Optimizer**: AdamW; **schedule**: linear LR **warmup** (`--warmup-epochs`)
+  then cosine anneal.
+- **Early stopping**: stop after `--patience` epochs without val-loss improvement
+  (0 disables); the `_best.pt` checkpoint holds the best model.
 - **Eval**: `evaluate()` returns per-target **MAE in physical units** over masked
   val entries (all-reduced across ranks under DDP).
 - **Checkpoint**: rank 0 saves a **per-epoch** `_last.pt` and a **best-by-val-loss**
@@ -82,7 +85,8 @@ are all-reduced, and only rank 0 logs/checkpoints. Verified across 2× MI350X.
 `phlogiston train` flags: `--stage {1,2}`, `--epochs`, `--batch-size`, `--lr`,
 `--encoder-lr` (stage-2 encoder LR), `--mul`, `--n-layers`, `--correlation`,
 `--max-shards`, `--out-dir`, `--init-ckpt` (warm-start weights),
-`--resume` (restore optimizer/scheduler/epoch/best and continue).
+`--resume` (restore optimizer/scheduler/epoch/best and continue),
+`--warmup-epochs`, `--patience` (early stopping).
 
 Typical schedule-B run:
 ```bash
@@ -123,7 +127,7 @@ torchrun --nproc_per_node=2 -m phlogiston.cli train --stage 2 --epochs 40 \
     box RAM or add lazy per-shard loading before the full run.
   - Test-set evaluation + parity plots + stability AUC (currently only val MAE).
   - Per-target loss weights; optional `log1p` for skewed targets (predictor §6).
-  - EMA of weights; early stopping on val; LR warmup.
-  - (Done: per-epoch `_last` + best-by-val `_best` checkpoints with optimizer/
-    scheduler state and `--resume`.)
+  - EMA of weights (deferred to the CDVAE generator; the predictor needs it little).
+  - (Done: per-epoch `_last` + best-by-val `_best` checkpoints + `--resume`;
+    linear LR warmup; early stopping on val.)
   - Set `avg_num_neighbors` precisely from data (currently the ~50 default).

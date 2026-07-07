@@ -66,6 +66,18 @@ def compute_normalization(dataset, indices, pred_idx: torch.Tensor):
     return mean.float(), std.float()
 
 
+def _build_scheduler(opt, epochs: int, warmup_epochs: int):
+    """Linear LR warmup for ``warmup_epochs`` then cosine anneal (per-epoch)."""
+    from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+
+    w = max(0, min(warmup_epochs, epochs - 1))
+    if w == 0:
+        return CosineAnnealingLR(opt, T_max=max(epochs, 1))
+    warm = LinearLR(opt, start_factor=0.01, end_factor=1.0, total_iters=w)
+    cos = CosineAnnealingLR(opt, T_max=max(epochs - w, 1))
+    return SequentialLR(opt, [warm, cos], milestones=[w])
+
+
 def _save_ckpt(path, base, stage, mean, std, epoch, opt, sched, best_val):
     """Full checkpoint: weights + norm stats + optimizer/scheduler for resume."""
     torch.save(
@@ -145,6 +157,8 @@ def train(
     out_dir: str = "runs",
     init_ckpt: str | None = None,
     resume: str | None = None,
+    warmup_epochs: int = 2,
+    patience: int = 20,
     seed: int = 42,
 ):
     world, rank, local = _dist_info()
@@ -205,7 +219,7 @@ def train(
         opt = torch.optim.AdamW(base.stage1_parameters(), lr=lr, weight_decay=weight_decay)
     else:
         opt = torch.optim.AdamW(base.stage2_param_groups(encoder_lr, lr), weight_decay=weight_decay)
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
+    sched = _build_scheduler(opt, epochs, warmup_epochs)
 
     start_epoch, best_val = 0, float("inf")
     if resume_state is not None:
@@ -236,6 +250,7 @@ def train(
 
     last_path = Path(out_dir) / f"predictor_stage{stage}_last.pt"
     best_path = Path(out_dir) / f"predictor_stage{stage}_best.pt"
+    epochs_no_improve = 0
 
     for epoch in range(start_epoch, epochs):
         if train_sampler is not None:
@@ -259,6 +274,9 @@ def train(
         improved = val_loss < best_val
         if improved:
             best_val = val_loss
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
         log(
             f"[train] epoch {epoch + 1}/{epochs} loss={running / max(n_batches, 1):.4f} "
             f"val_loss={val_loss:.4f}{' *' if improved else ''} val_MAE({stab}) "
@@ -268,6 +286,13 @@ def train(
             _save_ckpt(last_path, base, stage, mean, std, epoch, opt, sched, best_val)
             if improved:
                 _save_ckpt(best_path, base, stage, mean, std, epoch, opt, sched, best_val)
+
+        if patience > 0 and epochs_no_improve >= patience:
+            log(
+                f"[train] early stopping at epoch {epoch + 1} "
+                f"(no val improvement for {patience} epochs; best_val={best_val:.4f})"
+            )
+            break
 
     if is_main:
         log(f"[train] done. last={last_path} best={best_path} (best_val={best_val:.4f})")

@@ -121,6 +121,8 @@ def _cmd_train(args: argparse.Namespace) -> int:
         out_dir=args.out_dir,
         init_ckpt=args.init_ckpt,
         resume=args.resume,
+        warmup_epochs=args.warmup_epochs,
+        patience=args.patience,
     )
     return 0
 
@@ -322,6 +324,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--resume",
         default=None,
         help="Resume from a checkpoint (restores optimizer/scheduler/epoch/best)",
+    )
+    tr.add_argument(
+        "--warmup-epochs",
+        type=int,
+        default=2,
+        help="Linear LR warmup epochs before cosine decay",
+    )
+    tr.add_argument(
+        "--patience",
+        type=int,
+        default=20,
+        help="Early-stop after N epochs without val improvement (0 disables)",
     )
     tr.set_defaults(func=_cmd_train)
 
