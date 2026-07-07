@@ -44,10 +44,13 @@ Head (ScalarReadout, reduce="mean") ──► ŷ_norm [B, n_targets]
 de-standardize ──► ŷ [B, n_targets]  in physical units
 ```
 
-- **Head**: reuse `layers.ScalarReadout(irreps=mul x0e, n_out=n_targets,
-  hidden=(mul,), reduce="mean")` — a shared MLP trunk on the pooled per-graph
-  scalar feature producing all `n_targets` at once. (Option: per-target heads;
-  start shared for simplicity — §6.)
+- **Heads**: one **independent head per target** — a `ModuleList` of
+  `layers.ScalarReadout(irreps=mul x0e, n_out=1, hidden=(mul,), reduce="mean")`,
+  one per `PREDICT_KEYS` entry; outputs stacked to `[B, n_targets]`. Independent
+  heads let each property (energies vs moduli vs thermal) specialize, and make
+  schedule B clean: the stability heads and property heads are separate modules,
+  so a stage simply enables/freezes the relevant ones (no shared trunk to
+  disentangle).
 - Output is in **standardized** space; the model stores per-target `mean`/`std`
   buffers and de-standardizes at inference.
 
@@ -100,7 +103,7 @@ class Predictor(nn.Module):
   ≤ τ) AUC/F1, parity plots, per-chemistry breakdown. Anchor sanity vs Pd/diamond.
 
 ## 6. Open decisions
-- Shared-trunk head (n_out = n_targets) vs independent per-target MLP heads.
+- **Resolved**: independent per-target heads (not a shared trunk) — see §1.
 - `log1p` transform for κ / hardness / toughness (from label distributions).
 - Loss: Huber δ; per-target weights `w_t`.
 - Predict `energy_above_hull` directly (label available) vs derive from
