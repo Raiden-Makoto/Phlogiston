@@ -17,18 +17,25 @@ layer gets its own detailed spec file (`<layer>.md`) next to its implementation.
 - **Aggregation**: native `torch` scatter over `edge_index[0]` (no `pyg-lib`).
 - **Device/dtype**: layers are device-agnostic; ROCm-safe (only `e3nn` + torch).
 
-## Planned components (specs TBD — filled during Phase 4)
+## Components
+
+Encoder blocks — **specs written** (`<layer>.md` beside this file); code next.
 
 | Module | Purpose | Spec |
 |---|---|---|
-| `radial.py` | Bessel radial basis + smooth polynomial cutoff envelope | `radial.md` |
-| `spherical.py` | real spherical harmonics of `edge_vec` (ℓ ≤ L_max) | `spherical.md` |
-| `linear.py` | equivariant linear (per-irrep weight mixing) | `linear.md` |
-| `interaction.py` | CG tensor-product message passing + scatter aggregate | `interaction.md` |
-| `gate.py` | gated equivariant nonlinearity (scalars gate higher ℓ) | `gate.md` |
-| `readout.py` | per-atom → graph pooling + scalar head MLP | `readout.md` |
-| `embedding.py` | atomic-number embedding (+ optional element descriptors) | `embedding.md` |
-| `noise.py` | noise-level / timestep embedding (for the CDVAE decoder) | `noise.md` |
+| `embedding` | atomic-number embedding (+ optional element descriptors) | [embedding.md](embedding.md) ✅ |
+| `radial` | Bessel radial basis + smooth polynomial cutoff + weight MLP | [radial.md](radial.md) ✅ |
+| `spherical` | real spherical harmonics of `edge_vec` (ℓ ≤ L_sh) | [spherical.md](spherical.md) ✅ |
+| `linear` | equivariant linear (+ species-dependent skip) | [linear.md](linear.md) ✅ |
+| `interaction` | A-basis + symmetric contraction (body order ν) + message | [interaction.md](interaction.md) ✅ |
+| `gate` | gated equivariant nonlinearity (scalars gate higher ℓ) | [gate.md](gate.md) ✅ |
+| `readout` | scalar readout + graph pooling | [readout.md](readout.md) ✅ |
 
-> The precise architecture ("MACE-style E(3)") is defined per-layer in these
-> spec files, not in `pipeline.md`.
+Deferred (belongs to the CDVAE model, spec'd in that phase):
+
+| Module | Purpose | Spec |
+|---|---|---|
+| `noise` | noise-level / timestep embedding (CDVAE decoder) | (deferred) |
+
+> The precise architecture is defined per-layer in these spec files and assembled
+> in `models/encoder/DESIGN.md`, not in `pipeline.md`.
