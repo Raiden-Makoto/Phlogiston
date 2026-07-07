@@ -31,7 +31,8 @@ class EncoderOutput:
 class CrystalEncoder(nn.Module):
     def __init__(self, mul: int = 128, l_feat: int = 2, l_sh: int = 3,
                  n_layers: int = 2, n_bessel: int = 8, r_max: float = 6.0,
-                 num_species: int = 119, avg_num_neighbors: float = 50.0):
+                 num_species: int = 119, avg_num_neighbors: float = 50.0,
+                 correlation: int = 3):
         super().__init__()
         self.mul = mul
         # Fixed dataset constant (NOT computed per batch) so a graph's features
@@ -51,7 +52,7 @@ class CrystalEncoder(nn.Module):
                 # final block: scalars only (readout/heads use invariants)
                 inter = Interaction(irreps_in, self.sh.irreps_out,
                                     o3.Irreps(f"{mul}x0e"), l_feat, r_max,
-                                    n_bessel, num_species)
+                                    n_bessel, num_species, correlation=correlation)
                 self.interactions.append(inter)
                 self.gates.append(nn.Identity())
                 irreps_in = inter.irreps_out
@@ -59,7 +60,7 @@ class CrystalEncoder(nn.Module):
                 gate = EquivariantGate(hidden)
                 inter = Interaction(irreps_in, self.sh.irreps_out,
                                     gate.irreps_in, l_feat, r_max, n_bessel,
-                                    num_species)
+                                    num_species, correlation=correlation)
                 self.interactions.append(inter)
                 self.gates.append(gate)
                 irreps_in = gate.irreps_out                 # = hidden

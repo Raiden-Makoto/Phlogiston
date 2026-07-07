@@ -34,31 +34,34 @@ def _random_graph(n=6, e=20, seed=0, dtype=torch.float64):
     return n, edge_index, edge_vec, edge_len, z
 
 
-def _build(dtype=torch.float64):
+def _build(dtype=torch.float64, correlation=1):
     sh = SphericalHarmonics(l_max=3)
-    inter = Interaction(IRREPS_IN, sh.irreps_out, IRREPS_OUT, l_feat=2).to(dtype)
+    inter = Interaction(IRREPS_IN, sh.irreps_out, IRREPS_OUT, l_feat=2,
+                        correlation=correlation).to(dtype)
     return sh, inter
 
 
-def test_equivariance():
+def _equivariance_at(correlation):
     dtype = torch.float64
-    sh, inter = _build(dtype)
+    sh, inter = _build(dtype, correlation=correlation)
     n, edge_index, edge_vec, edge_len, z = _random_graph(dtype=dtype)
     h = o3.Irreps(IRREPS_IN).randn(n, -1).to(dtype)
     navg = edge_index.shape[1] / n
 
     out = inter(h, edge_index, edge_len, sh(edge_vec), z, navg)
-
     g = -o3.rand_matrix().to(dtype)                       # rotation + inversion
     D_in = o3.Irreps(IRREPS_IN).D_from_matrix(g).to(dtype)
     D_out = o3.Irreps(IRREPS_OUT).D_from_matrix(g).to(dtype)
-
     h_rot = h @ D_in.T
-    edge_vec_rot = edge_vec @ g.T                         # geometry transforms
-    out_rot = inter(h_rot, edge_index, edge_len, sh(edge_vec_rot), z, navg)
-
+    out_rot = inter(h_rot, edge_index, edge_len, sh(edge_vec @ g.T), z, navg)
     err = (out_rot - out @ D_out.T).abs().max().item()
-    _check("interaction equivariance (rotation+inversion)", err < 1e-5, f"err={err:.2e}")
+    _check(f"interaction equivariance (ν={correlation}, rot+inv)", err < 1e-5, f"err={err:.2e}")
+
+
+def test_equivariance():
+    # v1 (ν=1) and v2 symmetric contraction (ν=2, ν=3) all equivariant.
+    for nu in (1, 2, 3):
+        _equivariance_at(nu)
 
 
 def test_scalars_in_grow_higher_l():
