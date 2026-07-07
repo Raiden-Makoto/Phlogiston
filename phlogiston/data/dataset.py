@@ -155,13 +155,16 @@ class ShardedCrystalDataset(Dataset):
     waiting on featurization.
     """
 
-    def __init__(self, data_root: str, in_memory: bool = True):
+    def __init__(self, data_root: str, in_memory: bool = True,
+                 max_shards: int | None = None):
         from phlogiston.data.precompute import shard_dir
 
         shards = sorted(shard_dir(data_root).glob("shard_*.pt"))
         if not shards:
             raise FileNotFoundError(
                 f"No shards under {shard_dir(data_root)}; run `phlogiston featurize` first.")
+        if max_shards is not None:                 # partial load (tests / quick runs)
+            shards = shards[:max_shards]
         self.records: list[dict] = []
         for s in shards:
             self.records.extend(torch.load(s, weights_only=False))
