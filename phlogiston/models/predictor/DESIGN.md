@@ -1,21 +1,108 @@
 # Predictor — DESIGN
 
-`encoder` + readout heads for stability and mechanical/thermal properties.
-Trained with **schedule B** (pretrain encoder + stability on 629k, then low-LR
-fine-tune property heads on 12k). See `pipeline.md` §4–5.
+The shared `CrystalEncoder` + readout heads that predict stability and
+mechanical/thermal properties, trained with **schedule B** (pretrain encoder +
+stability on all ~629k structures, then low-LR fine-tune property heads on the
+~12k mechanically-labeled ones). See `pipeline.md` §4–5.
 
-> Status: **skeleton** — head architecture, target normalization, and loss
-> details to be filled next.
+---
 
-## Heads (over TARGET_KEYS; density is analytic, no head)
-- Stage 1: `formation_energy_per_atom`, `energy_above_hull`
-- Stage 2: `bulk_modulus_vrh`, `shear_modulus_vrh`, `vickers_hardness`,
-  `fracture_toughness`, `debye_temperature`, `slack_thermal_conductivity`
+## 0. Targets
 
-## To specify
-- Readout: pooling (sum/mean), per-head MLP width/depth.
-- Per-target standardization (train stats); per-atom vs intensive handling.
-- Masked multi-task loss (Huber/MSE), per-target weights.
+`PREDICT_KEYS` = the model's outputs, aligned with a slice of `TARGET_KEYS`.
+**Density is excluded** — it is analytic from the structure, so there is no
+reason to learn it.
 
-## Open decisions
-- Stage-2: low-LR encoder fine-tune vs partial freeze.
+```
+PREDICT_KEYS = [
+  formation_energy_per_atom,   # stability  (stage 1)
+  energy_above_hull,           # stability  (stage 1)
+  bulk_modulus_vrh,            # mechanical (stage 2)
+  shear_modulus_vrh,           # mechanical (stage 2)
+  vickers_hardness,            # mechanical (stage 2)
+  fracture_toughness,          # mechanical (stage 2)
+  debye_temperature,           # thermal    (stage 2)
+  slack_thermal_conductivity,  # thermal    (stage 2)
+]
+```
+
+All targets are **intensive** (per-atom energies / per-material properties), so
+readout pools by **mean** over atoms. Each target carries a mask (§3).
+
+## 1. Architecture
+
+```
+BatchedGraph
+   │
+   ▼
+CrystalEncoder ──► node_feats [N, mul]  (invariant per-atom scalars)
+   │
+   ▼
+Head (ScalarReadout, reduce="mean") ──► ŷ_norm [B, n_targets]
+   │  (mean-pool per graph + MLP)
+   ▼
+de-standardize ──► ŷ [B, n_targets]  in physical units
+```
+
+- **Head**: reuse `layers.ScalarReadout(irreps=mul x0e, n_out=n_targets,
+  hidden=(mul,), reduce="mean")` — a shared MLP trunk on the pooled per-graph
+  scalar feature producing all `n_targets` at once. (Option: per-target heads;
+  start shared for simplicity — §6.)
+- Output is in **standardized** space; the model stores per-target `mean`/`std`
+  buffers and de-standardizes at inference.
+
+## 2. Target normalization
+
+- Compute per-target `mean`, `std` over the **train split** (masked entries only)
+  once, store as buffers.
+- Train the head to predict `(y − mean)/std`; report/serve `ŷ·std + mean`.
+- Energies are already per-atom (intensive); no extra atom-count handling.
+- Skewed positive targets (κ, hardness, toughness) optionally `log1p`-transformed
+  before standardizing (decide from label histograms — §6).
+
+## 3. Masked multi-task loss
+
+No material has all labels, so the loss only counts present targets:
+
+```
+L = Σ_t  w_t · ( Σ_b mask[b,t] · huber(ŷ_norm[b,t], y_norm[b,t]) ) / (Σ_b mask[b,t] + ε)
+```
+
+- `huber` (smooth-L1) — robust to label outliers; `MSE` as an alternative.
+- `w_t`: per-target weights to balance abundant stability vs scarce mechanical
+  labels (and different target scales, mostly handled by normalization).
+- Per-target mean over *masked* samples so a target isn't down-weighted just
+  because it is rare in a batch.
+
+## 4. Interface (planned)
+
+```
+class Predictor(nn.Module):
+    def __init__(self, encoder_cfg, n_targets=len(PREDICT_KEYS), head_hidden=(mul,)): ...
+    def set_normalization(mean[T], std[T]): ...           # buffers from train stats
+    def forward(graph) -> Tensor[B, n_targets]            # de-standardized
+    def loss(pred, y, mask, weights) -> (total, per_target_dict)
+    def stage1_parameters() / stage2_parameters()         # param groups for schedule B
+```
+
+`y`, `mask` are the `PREDICT_KEYS` slice of the batch's `y`/`y_mask`.
+
+## 5. Schedule B (training; drivers live in `phlogiston/train`)
+
+- **Stage 1** — pretrain `encoder` + the two stability outputs on all ~629k
+  (masked to the stability columns). Yields a strong general encoder + stability
+  predictor.
+- **Stage 2** — enable the mechanical/thermal outputs; fine-tune encoder at a
+  **low LR** (`stage2_parameters` splits encoder vs head LRs) on the ~12k
+  labeled set. Early-stop on a held-out property val split; weight decay to
+  resist overfitting the small set.
+- Metrics: per-target MAE (physical units), stability classification (e_above_hull
+  ≤ τ) AUC/F1, parity plots, per-chemistry breakdown. Anchor sanity vs Pd/diamond.
+
+## 6. Open decisions
+- Shared-trunk head (n_out = n_targets) vs independent per-target MLP heads.
+- `log1p` transform for κ / hardness / toughness (from label distributions).
+- Loss: Huber δ; per-target weights `w_t`.
+- Predict `energy_above_hull` directly (label available) vs derive from
+  `formation_energy` against a stored convex hull.
+- Stage-2: low-LR encoder fine-tune vs partial freeze (decide from val curves).
