@@ -157,6 +157,10 @@ def _init_worker():
     for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
         os.environ[var] = "1"
     torch.set_num_threads(1)
+    # pymatgen warns on nearly every CIF (rounded coords, etc.); silencing it
+    # avoids flooding the log and the associated I/O throttling.
+    import warnings
+    warnings.filterwarnings("ignore")
 
 
 # --------------------------------------------------------------------------
