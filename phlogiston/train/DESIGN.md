@@ -118,10 +118,27 @@ torchrun --nproc_per_node=2 -m phlogiston.cli train --stage 2 --epochs 40 \
   outputs — a checkpoint without them yields wrong physical predictions. Rank-0
   only, unwrapped (non-DDP) state so it loads for single- or multi-GPU.
 
-## 7. Status & open items
+## 7. Hyperparameter tuning outcome
 
-- **Done & smoke-validated** (tiny subset, 1–2 GPUs): loop runs end-to-end, loss
-  and MAE decrease, DDP works. **No real training run yet** (no trained model).
+Coarse grid sweep (`scripts/sweep.py`, 8-shard subset, 15 epochs):
+
+- **Learning rate** (biggest lever): `3e-3` (0.313) > `1e-3` (0.334) > `3e-4` (0.356)
+  on the short subset runs — higher LR converged fastest there.
+- **Capacity**: differences were small (val_loss 0.307–0.315). `mul=192` was
+  marginally best; extra depth (`L3`) was marginal; and **ν=3 did *not* beat ν=2**
+  (rank 4) despite being much slower → **use ν=2** (drop the 4-body contraction).
+
+**Chosen config**: the full-corpus **baseline** `lr=1e-3, mul=128, ν=2, n_layers=2`,
+which already reaches **~0.021 eV/atom** formation-energy val MAE on the *full*
+corpus (far better than any subset number, and not comparable to them). Launching
+the marginally-different sweep-optimal config (`3e-3/mul192`) was judged
+diminishing returns. The sweep's main value: confirming the config is robust and
+that **ν=3 isn't worth the cost**.
+
+## 8. Status & open items
+
+- **Real Stage-1 run in progress** on the full corpus (baseline config), 2-GPU
+  DDP; formation-energy val MAE ~0.021 eV/atom and converging.
 - **Open**:
   - **Dataset RAM**: in-memory load is ~30 GB *per rank* (~60 GB for 2). Confirm
     box RAM or add lazy per-shard loading before the full run.
