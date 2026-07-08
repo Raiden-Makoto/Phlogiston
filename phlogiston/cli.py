@@ -127,6 +127,7 @@ def _cmd_train(args: argparse.Namespace) -> int:
         compile=args.compile,
         select_by=args.select_by,
         grad_clip=args.grad_clip,
+        restrict_labeled=args.restrict_labeled,
     )
     return 0
 
@@ -428,6 +429,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=5.0,
         help="Max grad norm (0 disables); guards against divergence",
+    )
+    tr.add_argument(
+        "--restrict-labeled",
+        action="store_true",
+        help="Train only on structures with a present label for the stage's "
+        "targets (fast, dense signal for stage-2 property fine-tuning)",
     )
     tr.set_defaults(func=_cmd_train)
 

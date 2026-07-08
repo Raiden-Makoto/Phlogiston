@@ -127,6 +127,27 @@ def _save_ckpt(path, base, stage, mean, std, epoch, opt, sched, best_val, hparam
     )
 
 
+def labeled_indices(dataset, stage: int) -> list[int]:
+    """Indices whose record carries >=1 present + physically-valid label among
+    the stage's targets (stability for stage 1; the mechanical/thermal
+    properties for stage 2). Used to restrict a run to the informative subset
+    (e.g. the ~12k property-labeled structures for stage-2 fine-tuning/sweeps)."""
+    from phlogiston.data.dataset import TARGET_KEYS
+
+    keys = STABILITY_KEYS if stage == 1 else [k for k in PREDICT_KEYS if k not in STABILITY_KEYS]
+    cols = torch.tensor([TARGET_KEYS.index(k) for k in keys], dtype=torch.long)
+    records = getattr(dataset, "records", None)
+    if records is None:
+        return list(range(len(dataset)))
+    keep = []
+    for i, r in enumerate(records):
+        y = torch.tensor(r["y"])
+        m = torch.tensor(r["mask"], dtype=torch.bool) & physical_mask(y)
+        if bool(m[cols].any()):
+            keep.append(i)
+    return keep
+
+
 def _stage_mask(mask, stage: int):
     """Stage 1 keeps only stability columns; stage 2 keeps all."""
     if stage == 2:
@@ -271,6 +292,7 @@ def train(
     compile: bool = False,
     select_by: str | None = None,
     grad_clip: float = 5.0,
+    restrict_labeled: bool = False,
     seed: int = 42,
 ):
     # Best-checkpoint selection metric. Default is stage-aware: stability AUC
@@ -308,6 +330,10 @@ def train(
     )
 
     dataset = ShardedCrystalDataset(data_root, max_shards=max_shards)
+    if restrict_labeled:
+        idx = labeled_indices(dataset, stage)
+        log(f"[train] restrict to stage-{stage} labeled subset: {len(idx):,}/{len(dataset):,}")
+        dataset = Subset(dataset, idx)
     tr, va, te = split_indices(len(dataset), seed=seed)  # identical across ranks
     log(
         f"[train] {len(dataset):,} graphs -> train {len(tr):,} / val {len(va):,} / test {len(te):,}"
