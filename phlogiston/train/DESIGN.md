@@ -68,6 +68,10 @@ shards ──► ShardedCrystalDataset ──► split(train/val/test)
     `LOG_TARGETS` = Hv, κ; identity otherwise): physical-space R² for a log
     target is dominated by exponential error amplification and is unstable,
     while the transform space is where the target is linear;
+  - per-target **Spearman ρ** (rank correlation) — the screen-oriented metric:
+    it only cares whether candidates are *ordered* correctly (invariant to the
+    log1p transform and to miscalibration), which is exactly what shortlisting
+    the top-K needs. A model can have modest R² but high ρ and still screen well;
   - **stability ROC-AUC + average precision (AP)** for `energy_above_hull`
     (positive class = unstable, i.e. `e_hull > threshold`) — the imbalance-aware
     separation metric, since ~98% of rows are stable and MAE looks small

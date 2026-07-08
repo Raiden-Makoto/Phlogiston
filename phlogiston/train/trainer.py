@@ -185,6 +185,33 @@ def _stability_metrics(pred_ehull, true_ehull, threshold, distributed):
             "ap": float(average_precision_score(label, p)), "frac_unstable": frac}
 
 
+def _spearman(pred, true, distributed):
+    """Spearman rank correlation between predictions and labels for one target.
+
+    Rank-only, so it's invariant to the log1p transform and to miscalibration —
+    it measures whether the model *orders* candidates correctly, which is what a
+    discovery screen actually needs. NaN if <2 points or a constant series.
+    """
+    import numpy as np
+
+    if distributed:
+        gp, gt = [None] * dist.get_world_size(), [None] * dist.get_world_size()
+        dist.all_gather_object(gp, pred.cpu().tolist())
+        dist.all_gather_object(gt, true.cpu().tolist())
+        p = np.array([x for sub in gp for x in sub])
+        y = np.array([x for sub in gt for x in sub])
+    else:
+        p, y = pred.cpu().numpy(), true.cpu().numpy()
+
+    finite = np.isfinite(p) & np.isfinite(y)
+    p, y = p[finite], y[finite]
+    if len(y) < 2 or p.std() == 0 or y.std() == 0:
+        return float("nan")
+    from scipy.stats import spearmanr
+
+    return float(spearmanr(p, y).correlation)
+
+
 def _selection_score(select_by, metrics, report_keys, val_loss):
     """Lower-is-better scalar for best-checkpoint selection.
 
@@ -224,6 +251,8 @@ def evaluate(model, loader, device, stage: int = 2, distributed: bool = False,
     n_batches = torch.zeros(1, device=device)
     ehull = PREDICT_KEYS.index("energy_above_hull")
     ep, et = [], []
+    col_p: list[list] = [[] for _ in range(t)]  # per-target masked preds (ranking)
+    col_t: list[list] = [[] for _ in range(t)]
     for batch in loader:
         batch = batch.to(device)
         pred = model(batch)
@@ -248,6 +277,11 @@ def evaluate(model, loader, device, stage: int = 2, distributed: bool = False,
         if m.any():
             ep.append(pred[m, ehull].detach())
             et.append(y[m, ehull].detach())
+        for j in range(t):  # per-target masked pairs for rank correlation
+            mj = mask[:, j]
+            if mj.any():
+                col_p[j].append(pred[mj, j].detach())
+                col_t[j].append(y[mj, j].detach())
     if distributed:
         for tns in (abs_err, sq_err, sum_y, sum_y2, cnt, loss_sum, n_batches):
             dist.all_reduce(tns)
@@ -261,9 +295,19 @@ def evaluate(model, loader, device, stage: int = 2, distributed: bool = False,
         torch.cat(ep) if ep else torch.zeros(0, device=device),
         torch.cat(et) if et else torch.zeros(0, device=device),
         stability_threshold, distributed)
+    empty = torch.zeros(0, device=device)
+    spearman = {
+        k: _spearman(
+            torch.cat(col_p[i]) if col_p[i] else empty,
+            torch.cat(col_t[i]) if col_t[i] else empty,
+            distributed,
+        )
+        for i, k in enumerate(PREDICT_KEYS)
+    }
     return {
         "mae": {k: mae[i].item() for i, k in enumerate(PREDICT_KEYS)},
         "r2": {k: r2[i].item() for i, k in enumerate(PREDICT_KEYS)},
+        "spearman": spearman,
         "val_loss": val_loss,
         "stability": stab,
     }
@@ -436,6 +480,7 @@ def train(
         )
         mae_s = ", ".join(f"{_LABELS[k]}={metrics['mae'][k]:.3f}" for k in report_keys)
         r2_s = ", ".join(f"{_LABELS[k]}={metrics['r2'][k]:.2f}" for k in report_keys)
+        rho_s = ", ".join(f"{_LABELS[k]}={metrics['spearman'][k]:.2f}" for k in report_keys)
         st = metrics["stability"]
         # selection score: lower-is-better (negate metrics where higher=better),
         # NaN-safe fall back to val_loss so we always keep checkpointing.
@@ -449,7 +494,7 @@ def train(
         log(
             f"[train] epoch {epoch + 1}/{epochs} loss={running / max(n_batches, 1):.4f} "
             f"val_loss={val_loss:.4f} | MAE({mae_s}) | "
-            f"R2({r2_s}) | stab AUC={st['auc']:.3f} AP={st['ap']:.3f} | "
+            f"R2({r2_s}) | rho({rho_s}) | stab AUC={st['auc']:.3f} AP={st['ap']:.3f} | "
             f"select[{select_by}]={score:.4f}{' *' if improved else ''} "
             f"{time.time() - t0:.1f}s"
         )
@@ -514,9 +559,12 @@ def evaluate_checkpoint(
     metrics = evaluate(model, loader, device, stage=stage, distributed=False)
     st = metrics["stability"]
     print(f"[eval] val_loss={metrics['val_loss']:.4f}")
-    print(f"[eval] {'target':<28}{'MAE':>12}{'R2':>10}")
+    print(f"[eval] {'target':<28}{'MAE':>12}{'R2':>10}{'rho':>10}")
     for k in PREDICT_KEYS:
-        print(f"[eval]   {_LABELS.get(k, k):<26}{metrics['mae'][k]:>12.4f}{metrics['r2'][k]:>10.3f}")
+        print(
+            f"[eval]   {_LABELS.get(k, k):<26}{metrics['mae'][k]:>12.4f}"
+            f"{metrics['r2'][k]:>10.3f}{metrics['spearman'][k]:>10.3f}"
+        )
     print(
         f"[eval] stability (Ehull>{0.0:.2f}): AUC={st['auc']:.3f} AP={st['ap']:.3f} "
         f"frac_unstable={st['frac_unstable']:.3f}"
