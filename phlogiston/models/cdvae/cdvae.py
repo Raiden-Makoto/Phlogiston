@@ -1,0 +1,183 @@
+"""CDVAE assembly (see DESIGN.md §6-7).
+
+Ties the VAE encoder, latent predictors, score decoder, and diffusion utilities
+into one model: a composite training loss and an ab-initio ``generate()``.
+
+Coordinate score matching perturbs node positions with per-node noise; because
+the stored ``edge_vec`` already bakes in periodic-image offsets, the noisy edge
+vectors are ``edge_vec + delta[j] - delta[i]`` — no neighbor rebuild needed
+during training.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+
+import torch
+import torch.nn.functional as F
+from torch import nn
+
+from phlogiston.models.cdvae import diffusion as D
+from phlogiston.models.cdvae.decoder import CDVAEDecoder
+from phlogiston.models.cdvae.encoder import CDVAEEncoder
+from phlogiston.models.cdvae.predictors import LatentPredictors
+
+_LAT_SCALE = torch.tensor([10.0, 10.0, 10.0, 90.0, 90.0, 90.0])  # rough length/angle scales
+
+
+def _lattice_params(L: torch.Tensor) -> torch.Tensor:
+    """Lattice matrices [B,3,3] -> [B,6] (a,b,c, alpha,beta,gamma in degrees)."""
+    lengths = L.norm(dim=-1)  # [B,3]
+    a, b, c = L[:, 0], L[:, 1], L[:, 2]
+
+    def angle(u, v):
+        cos = (u * v).sum(-1) / (u.norm(dim=-1) * v.norm(dim=-1)).clamp(min=1e-8)
+        return torch.rad2deg(torch.acos(cos.clamp(-1.0, 1.0)))
+
+    angles = torch.stack([angle(b, c), angle(a, c), angle(a, b)], dim=-1)
+    return torch.cat([lengths, angles], dim=-1)
+
+
+class CDVAE(nn.Module):
+    def __init__(
+        self,
+        latent_dim: int = 256,
+        mul: int = 128,
+        n_max: int = 64,
+        n_elements: int = 100,
+        beta: float = 0.01,
+        sigma_min: float = 0.01,
+        sigma_max: float = 10.0,
+        n_levels: int = 50,
+        loss_weights: dict | None = None,
+        **backbone_kwargs,
+    ):
+        super().__init__()
+        self.latent_dim = latent_dim
+        self.n_max = n_max
+        self.n_elements = n_elements
+        self.beta = beta
+        self.sigma_min = sigma_min
+        self.encoder = CDVAEEncoder(latent_dim=latent_dim, mul=mul, **backbone_kwargs)
+        self.predictors = LatentPredictors(
+            latent_dim=latent_dim, n_max=n_max, n_elements=n_elements
+        )
+        self.decoder = CDVAEDecoder(
+            latent_dim=latent_dim, n_elements=n_elements, mul=mul, **backbone_kwargs
+        )
+        self.register_buffer("sigmas", D.geometric_sigmas(sigma_min, sigma_max, n_levels))
+        self.register_buffer("_lat_scale", _LAT_SCALE.clone())
+        self.w = {"num": 1.0, "lattice": 1.0, "composition": 1.0, "coord": 1.0, "type": 1.0}
+        if loss_weights:
+            self.w.update(loss_weights)
+
+    # ---- targets from a batch ------------------------------------------
+    def _targets(self, graph):
+        b = graph.batch
+        n_graphs = int(b.max()) + 1
+        n_atoms = torch.bincount(b, minlength=n_graphs)  # [B]
+        num_target = (n_atoms - 1).clamp(0, self.n_max - 1)
+        elem_idx = (graph.z - 1).clamp(0, self.n_elements - 1)  # [N]
+        comp = torch.zeros(n_graphs, self.n_elements, device=b.device)
+        comp.index_put_((b, elem_idx), torch.ones_like(elem_idx, dtype=comp.dtype), accumulate=True)
+        comp = comp / comp.sum(-1, keepdim=True).clamp(min=1)
+        lat = _lattice_params(graph.lattice) / self._lat_scale
+        return num_target, comp, lat, elem_idx
+
+    # ---- training loss --------------------------------------------------
+    def training_loss(self, graph):
+        vae = self.encoder(graph)
+        pred = self.predictors(vae.z)
+        num_target, comp_target, lat_target, elem_idx = self._targets(graph)
+
+        l_kl = CDVAEEncoder.kl_loss(vae.mu, vae.logvar)
+        l_num = F.cross_entropy(pred.num_atoms_logits, num_target)
+        l_lat = F.mse_loss(pred.lattice, lat_target)
+        l_comp = -(comp_target * F.log_softmax(pred.composition_logits, dim=-1)).sum(-1).mean()
+
+        # coordinate score matching (perturb node positions -> noisy edge vectors)
+        n_graphs = comp_target.shape[0]
+        sigma_g = D.sample_sigma(self.sigmas, n_graphs).to(graph.edge_vec)
+        sigma_node = sigma_g[graph.batch].unsqueeze(-1)  # [N,1]
+        eps = torch.randn(
+            graph.z.shape[0], 3, device=graph.edge_vec.device, dtype=graph.edge_vec.dtype
+        )
+        delta = sigma_node * eps
+        noisy_edge_vec = graph.edge_vec + delta[graph.edge_index[1]] - delta[graph.edge_index[0]]
+        noisy = dataclasses.replace(
+            graph, edge_vec=noisy_edge_vec, edge_len=noisy_edge_vec.norm(dim=-1)
+        )
+        score = self.decoder(noisy, vae.z, sigma_g)
+        l_coord = D.dsm_loss(score.coord_score, eps, sigma_node)
+        l_type = F.cross_entropy(score.type_logits, elem_idx)
+
+        total = (
+            self.beta * l_kl
+            + self.w["num"] * l_num
+            + self.w["lattice"] * l_lat
+            + self.w["composition"] * l_comp
+            + self.w["coord"] * l_coord
+            + self.w["type"] * l_type
+        )
+        parts = {
+            "kl": l_kl,
+            "num": l_num,
+            "lattice": l_lat,
+            "composition": l_comp,
+            "coord": l_coord,
+            "type": l_type,
+        }
+        return total, parts
+
+    # ---- ab-initio generation (prototype) ------------------------------
+    @torch.no_grad()
+    def generate(
+        self,
+        n_atoms: int,
+        lattice,
+        z: torch.Tensor | None = None,
+        steps_per_level: int = 4,
+        cutoff: float = 6.0,
+    ):
+        """Prototype ab-initio sampler for a single structure with given cell/size.
+
+        (Full pipeline predicts n_atoms/lattice/composition from z; here they are
+        provided so generation is well-posed even with an untrained model.)
+        """
+        from pymatgen.core import Lattice, Structure
+
+        from phlogiston.data.dataset import collate
+        from phlogiston.data.graph import structure_to_graph
+
+        device = next(self.parameters()).device
+        if z is None:
+            z = torch.randn(1, self.latent_dim, device=device)
+        pred = self.predictors(z)
+        comp = torch.softmax(pred.composition_logits[0], dim=-1)
+        species = (torch.multinomial(comp, n_atoms, replacement=True) + 1).tolist()
+        frac = torch.rand(n_atoms, 3)
+        lat = Lattice(lattice) if not isinstance(lattice, Lattice) else lattice
+
+        for sigma in self.sigmas.tolist():
+            for _ in range(steps_per_level):
+                struct = Structure(lat, species, frac.tolist())
+                try:
+                    g = collate(
+                        [
+                            (
+                                structure_to_graph(struct, cutoff=cutoff),
+                                torch.zeros(1),
+                                torch.zeros(1, dtype=torch.bool),
+                            )
+                        ]
+                    )
+                except ValueError:
+                    break  # isolated atoms; stop refining at this config
+                g = g.to(device)
+                score = self.decoder(g, z, torch.tensor([sigma], device=device)).coord_score
+                cart = torch.tensor(struct.cart_coords, dtype=torch.float32)
+                cart = D.langevin_step(cart, score.cpu(), sigma, self.sigma_min)
+                frac = (
+                    torch.tensor(lat.get_fractional_coords(cart.numpy()), dtype=torch.float32) % 1.0
+                )
+        return Structure(lat, species, frac.tolist())
