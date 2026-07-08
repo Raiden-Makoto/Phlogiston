@@ -306,7 +306,12 @@ def build_parser() -> argparse.ArgumentParser:
     tr = sub.add_parser("train", help="Train the predictor (schedule B)")
     tr.add_argument("--stage", type=int, default=1, choices=[1, 2])
     tr.add_argument("--epochs", type=int, default=10)
-    tr.add_argument("--batch-size", type=int, default=64)
+    tr.add_argument(
+        "--batch-size",
+        type=int,
+        default=512,
+        help="Large default: MI350X 288GB has headroom, keeps GPUs fed",
+    )
     tr.add_argument("--lr", type=float, default=1e-3)
     tr.add_argument(
         "--encoder-lr", type=float, default=1e-4, help="Encoder LR in stage 2 (fine-tune)"

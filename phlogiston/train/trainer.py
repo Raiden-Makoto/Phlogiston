@@ -153,7 +153,7 @@ def train(
     *,
     stage: int = 1,
     epochs: int = 10,
-    batch_size: int = 64,
+    batch_size: int = 512,  # 288 GB HBM has ample headroom; keeps GPUs fed
     lr: float = 1e-3,
     encoder_lr: float = 1e-4,
     weight_decay: float = 1e-5,
