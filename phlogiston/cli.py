@@ -126,6 +126,7 @@ def _cmd_train(args: argparse.Namespace) -> int:
         num_workers=args.num_workers,
         compile=args.compile,
         select_by=args.select_by,
+        grad_clip=args.grad_clip,
     )
     return 0
 
@@ -376,6 +377,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         choices=["loss", "auc", "r2"],
         help="Best-checkpoint metric (default: stage 1 -> auc, stage 2 -> r2)",
+    )
+    tr.add_argument(
+        "--grad-clip",
+        type=float,
+        default=5.0,
+        help="Max grad norm (0 disables); guards against divergence",
     )
     tr.set_defaults(func=_cmd_train)
 

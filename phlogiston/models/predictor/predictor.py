@@ -29,6 +29,14 @@ PREDICT_KEYS: tuple[str, ...] = (
 )
 STABILITY_KEYS: tuple[str, ...] = ("formation_energy_per_atom", "energy_above_hull")
 
+# Targets learned in log1p space then inverted at the output. These are strongly
+# nonlinear derived quantities (Hv ~ G^0.585 with a subtraction; kappa ~
+# theta_D^3 / gamma^2) with a wide, right-skewed dynamic range; log1p linearizes
+# them and stabilizes the standardized Huber loss. Both are >= 0, so log1p is
+# well defined (and log1p(0)=0). Predictions are expm1'd back to physical units,
+# so MAE/R2 remain in physical units.
+LOG_TARGETS: frozenset[str] = frozenset({"vickers_hardness", "slack_thermal_conductivity"})
+
 
 class Predictor(nn.Module):
     def __init__(
@@ -58,19 +66,46 @@ class Predictor(nn.Module):
         )
         self._stability_idx = [PREDICT_KEYS.index(k) for k in STABILITY_KEYS]
         self._property_idx = [i for i in range(self.n_targets) if i not in self._stability_idx]
+        # which prediction columns are learned in log1p space (non-persistent:
+        # it's a constant derived from LOG_TARGETS, and keeping it out of the
+        # state_dict avoids breaking older checkpoints on load).
+        self.register_buffer(
+            "log_mask",
+            torch.tensor([k in LOG_TARGETS for k in PREDICT_KEYS], dtype=torch.bool),
+            persistent=False,
+        )
 
     # --- normalization ---------------------------------------------------
     def set_normalization(self, mean: torch.Tensor, std: torch.Tensor) -> None:
+        """Set per-target mean/std. NOTE: these live in the *transform* space
+        (log1p for LOG_TARGETS), i.e. compute them over ``to_transform(y)``."""
         self.target_mean.copy_(mean.to(self.target_mean))
         self.target_std.copy_(std.to(self.target_std).clamp(min=1e-8))
 
+    # --- target transform (physical <-> model space) --------------------
+    def to_transform(self, y: torch.Tensor) -> torch.Tensor:
+        """Physical units -> transform space (log1p on LOG_TARGET columns)."""
+        return torch.where(self.log_mask, torch.log1p(y.clamp(min=-1 + 1e-6)), y)
+
+    def from_transform(self, yt: torch.Tensor) -> torch.Tensor:
+        """Transform space -> physical units (expm1 on LOG_TARGET columns).
+
+        The log columns are clamped before expm1: valid physical values give
+        transform-space magnitudes <= ~8.5 (log1p of the ~5000 upper bound), so
+        clamping at 20 (expm1(20)~5e8) is far above any real label yet prevents
+        float32 overflow to +inf during early, unconverged training -- an inf
+        here would make the loss inf and NaN out the whole model.
+        """
+        safe = yt.clamp(min=-20.0, max=20.0)
+        return torch.where(self.log_mask, torch.expm1(safe), yt)
+
     # --- forward ---------------------------------------------------------
     def forward(self, graph) -> torch.Tensor:
-        """Return de-standardized predictions ``[B, n_targets]`` (physical units)."""
+        """Return predictions ``[B, n_targets]`` in physical units."""
         node_feats = self.encoder(graph).node_feats
         preds = [head(node_feats, graph.batch) for head in self.heads]  # each [B,1]
-        pred_norm = torch.cat(preds, dim=1)  # [B, T]
-        return pred_norm * self.target_std + self.target_mean
+        pred_norm = torch.cat(preds, dim=1)  # [B, T] standardized transform space
+        return self.from_transform(pred_norm * self.target_std + self.target_mean)
 
     def slice_targets(self, y_full: torch.Tensor, mask_full: torch.Tensor):
         """Extract the PREDICT_KEYS columns from a batch's y / y_mask."""
@@ -83,8 +118,10 @@ class Predictor(nn.Module):
         pred, y, mask: ``[B, n_targets]`` (physical units for pred/y; bool mask).
         Returns (total, per_target dict).
         """
-        pred_n = (pred - self.target_mean) / self.target_std
-        y_n = (y - self.target_mean) / self.target_std
+        # standardize in transform space (log1p for LOG_TARGETS); for those
+        # columns this makes the loss operate on the linearized quantity.
+        pred_n = (self.to_transform(pred) - self.target_mean) / self.target_std
+        y_n = (self.to_transform(y) - self.target_mean) / self.target_std
         m = mask.to(pred_n.dtype)
         per_elem = F.huber_loss(pred_n, y_n, reduction="none", delta=self.huber_delta)
         per_elem = per_elem * m  # zero out absent labels

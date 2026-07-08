@@ -64,7 +64,10 @@ shards ──► ShardedCrystalDataset ──► split(train/val/test)
   across ranks under DDP):
   - per-target **MAE** in physical units;
   - per-target **R²** (`1 − SS_res/SS_tot`) — flags "predicts the mean" cases
-    that MAE alone hides;
+    that MAE alone hides. Computed in the model's **transform space** (log1p for
+    `LOG_TARGETS` = Hv, κ; identity otherwise): physical-space R² for a log
+    target is dominated by exponential error amplification and is unstable,
+    while the transform space is where the target is linear;
   - **stability ROC-AUC + average precision (AP)** for `energy_above_hull`
     (positive class = unstable, i.e. `e_hull > threshold`) — the imbalance-aware
     separation metric, since ~98% of rows are stable and MAE looks small

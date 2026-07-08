@@ -57,12 +57,15 @@ def split_indices(n: int, ratios=(0.8, 0.1, 0.1), seed: int = 42):
     return perm[:n_tr], perm[n_tr : n_tr + n_va], perm[n_tr + n_va :]
 
 
-def compute_normalization(dataset, indices, pred_idx: torch.Tensor):
-    """Masked per-target mean/std over the train split (physical units)."""
+def compute_normalization(dataset, indices, pred_idx: torch.Tensor, log_mask=None):
+    """Masked per-target mean/std over the train split, in the model's *transform*
+    space: columns flagged by ``log_mask`` (pred order) are log1p'd first, so the
+    stats match what the loss standardizes (see Predictor.to_transform)."""
     t = len(pred_idx)
     s = torch.zeros(t, dtype=torch.float64)
     ss = torch.zeros(t, dtype=torch.float64)
     cnt = torch.zeros(t, dtype=torch.float64)
+    lm = log_mask.cpu() if log_mask is not None else torch.zeros(t, dtype=torch.bool)
     # read labels directly from shard records if available (avoids rebuilding
     # graph tensors for every training example just to grab y/mask).
     records = getattr(dataset, "records", None)
@@ -78,6 +81,7 @@ def compute_normalization(dataset, indices, pred_idx: torch.Tensor):
             _, y, m = dataset[i]
             y = y[pred_idx].double()
             m = m[pred_idx].double()
+        y = torch.where(lm, torch.log1p(y.clamp(min=-1 + 1e-6)), y)  # transform space
         s += y * m
         ss += (y * y) * m
         cnt += m
@@ -146,6 +150,8 @@ def _stability_metrics(pred_ehull, true_ehull, threshold, distributed):
     else:
         p, y = pred_ehull.cpu().numpy(), true_ehull.cpu().numpy()
 
+    finite = np.isfinite(p) & np.isfinite(y)  # a diverged model can emit NaN/inf
+    p, y = p[finite], y[finite]
     if len(y) == 0:
         return {"auc": float("nan"), "ap": float("nan"), "frac_unstable": float("nan")}
     label = (y > threshold).astype(int)  # positive class = unstable (the minority)
@@ -203,11 +209,16 @@ def evaluate(model, loader, device, stage: int = 2, distributed: bool = False,
         y, mask = base.slice_targets(batch.y, batch.y_mask)
         mask = _stage_mask(mask, stage)
         mf = mask.float()
-        diff = pred - y
-        abs_err += diff.abs().mul(mf).sum(0)
-        sq_err += (diff * diff).mul(mf).sum(0)
-        sum_y += y.mul(mf).sum(0)
-        sum_y2 += (y * y).mul(mf).sum(0)
+        abs_err += (pred - y).abs().mul(mf).sum(0)  # MAE in physical units
+        # R² is computed in the model's *transform* space (log1p for LOG_TARGETS,
+        # identity otherwise): physical-space R² for a log target is dominated by
+        # exponential error amplification and is wildly unstable, whereas the
+        # transform space is exactly where the quantity is linear.
+        pt, yt = base.to_transform(pred), base.to_transform(y)
+        difft = pt - yt
+        sq_err += (difft * difft).mul(mf).sum(0)
+        sum_y += yt.mul(mf).sum(0)
+        sum_y2 += (yt * yt).mul(mf).sum(0)
         cnt += mf.sum(0)
         loss, _ = base.loss(pred, y, mask)
         loss_sum += loss.detach()
@@ -259,6 +270,7 @@ def train(
     num_workers: int = 4,
     compile: bool = False,
     select_by: str | None = None,
+    grad_clip: float = 5.0,
     seed: int = 42,
 ):
     # Best-checkpoint selection metric. Default is stage-aware: stability AUC
@@ -319,7 +331,7 @@ def train(
         std.copy_(resume_state["std"].to(device))
     else:
         if is_main:
-            m0, s0 = compute_normalization(dataset, tr, model.pred_idx.cpu())
+            m0, s0 = compute_normalization(dataset, tr, model.pred_idx.cpu(), model.log_mask)
             mean.copy_(m0.to(device))
             std.copy_(s0.to(device))
         if distributed:
@@ -383,6 +395,8 @@ def train(
             loss, _ = base.loss(pred, y, mask)
             opt.zero_grad()
             loss.backward()
+            if grad_clip > 0:  # guard against divergence (esp. log-space heads)
+                torch.nn.utils.clip_grad_norm_(base.parameters(), grad_clip)
             opt.step()
             running += loss.item()
             n_batches += 1

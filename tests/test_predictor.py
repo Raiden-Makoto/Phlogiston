@@ -87,11 +87,38 @@ def test_backward_runs_and_grads():
     _check("stage-1 loss backprops into encoder", enc_grad, f"loss={total.item():.4f}")
 
 
+def test_log_transform_roundtrip():
+    from phlogiston.models.predictor import LOG_TARGETS
+
+    model = _model()
+    # log columns must match LOG_TARGETS
+    log_cols = {PREDICT_KEYS[i] for i in range(len(PREDICT_KEYS)) if bool(model.log_mask[i])}
+    _check("log_mask matches LOG_TARGETS", log_cols == set(LOG_TARGETS), str(sorted(log_cols)))
+
+    # physical -> transform -> physical is identity (incl. log columns)
+    y = torch.rand(5, len(PREDICT_KEYS)) * 500.0  # positive physical values
+    back = model.from_transform(model.to_transform(y))
+    _check("to/from_transform round-trips", torch.allclose(back, y, atol=1e-3),
+           f"max err {(back - y).abs().max().item():.2e}")
+
+    # with normalization set in transform space, forward's de-standardize path
+    # recovers physical y for every column (log and linear alike)
+    mean = model.to_transform(y).mean(0)
+    std = model.to_transform(y).std(0).clamp(min=1e-6)
+    model.set_normalization(mean, std)
+    y_std = (model.to_transform(y) - mean) / std
+    recovered = model.from_transform(y_std * model.target_std + model.target_mean)
+    _check("standardize->destandardize recovers physical y",
+           torch.allclose(recovered, y, atol=1e-2),
+           f"max err {(recovered - y).abs().max().item():.2e}")
+
+
 if __name__ == "__main__":
     test_forward_shape()
     test_masked_loss_ignores_absent()
     test_stage_param_groups()
     test_backward_runs_and_grads()
+    test_log_transform_roundtrip()
     n_fail = sum(1 for _, ok, _ in _results if not ok)
     print(f"\n{len(_results) - n_fail}/{len(_results)} passed")
     sys.exit(1 if n_fail else 0)

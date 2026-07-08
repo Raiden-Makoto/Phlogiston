@@ -60,8 +60,15 @@ de-standardize ──► ŷ [B, n_targets]  in physical units
   once, store as buffers.
 - Train the head to predict `(y − mean)/std`; report/serve `ŷ·std + mean`.
 - Energies are already per-atom (intensive); no extra atom-count handling.
-- Skewed positive targets (κ, hardness, toughness) optionally `log1p`-transformed
-  before standardizing (decide from label histograms — §6).
+- **log1p targets** (`LOG_TARGETS` = Vickers hardness, Slack κ): these are
+  strongly nonlinear derived quantities (Hv ∝ G^0.585 with a subtraction; κ ∝
+  θ_D³/γ²) with wide, right-skewed range. They are learned in `log1p` space:
+  `mean`/`std` are computed over `to_transform(y)`, the head predicts the
+  standardized log1p value, and `forward` applies `expm1` so outputs (and thus
+  MAE/R²) are back in physical units. `to_transform`/`from_transform` handle the
+  per-column mapping; `log_mask` is a non-persistent buffer (constant), so older
+  checkpoints still load. Empirically this lifts Hv/κ R² (their weak spot under
+  linear-space training).
 
 ## 3. Masked multi-task loss
 
