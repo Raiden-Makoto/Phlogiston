@@ -84,6 +84,11 @@ class CDVAE(nn.Module):
         lat = _lattice_params(graph.lattice) / self._lat_scale
         return num_target, comp, lat, elem_idx
 
+    def forward(self, graph):
+        """Alias for :meth:`training_loss` so the model can be wrapped in DDP
+        (gradient all-reduce hooks fire only through ``Module.__call__``)."""
+        return self.training_loss(graph)
+
     # ---- training loss --------------------------------------------------
     def training_loss(self, graph):
         vae = self.encoder(graph)
@@ -128,6 +133,44 @@ class CDVAE(nn.Module):
             "type": l_type,
         }
         return total, parts
+
+    # ---- lattice reconstruction ----------------------------------------
+    def _lattice_from_params(self, params6: torch.Tensor):
+        """[6] normalized (a,b,c,alpha,beta,gamma) -> pymatgen Lattice."""
+        from pymatgen.core import Lattice
+
+        p = (params6.detach().cpu() * self._lat_scale.cpu()).tolist()
+        a, b, c = (max(v, 1.0) for v in p[:3])  # guard against tiny/degenerate cells
+        al, be, ga = (min(max(v, 20.0), 160.0) for v in p[3:])  # keep angles valid
+        return Lattice.from_parameters(a, b, c, al, be, ga)
+
+    # ---- full ab-initio sampling ---------------------------------------
+    @torch.no_grad()
+    def sample(
+        self,
+        z: torch.Tensor | None = None,
+        n_atoms: int | None = None,
+        steps_per_level: int = 4,
+        cutoff: float = 6.0,
+    ):
+        """Ab-initio: draw ``z``, predict N / lattice / composition from it, then
+        denoise coordinates by annealed Langevin. Returns a pymatgen Structure.
+
+        ``n_atoms`` may be given to override the predicted size (useful for
+        targeted sizes); otherwise it is taken from the num_atoms head.
+        """
+        device = next(self.parameters()).device
+        if z is None:
+            z = torch.randn(1, self.latent_dim, device=device)
+        pred = self.predictors(z)
+        if n_atoms is None:
+            n_atoms = int(pred.num_atoms_logits[0].argmax().item()) + 1
+        n_atoms = max(1, min(n_atoms, self.n_max))
+        lattice = self._lattice_from_params(pred.lattice[0])
+        return self.generate(
+            n_atoms=n_atoms, lattice=lattice, z=z,
+            steps_per_level=steps_per_level, cutoff=cutoff,
+        )
 
     # ---- ab-initio generation (prototype) ------------------------------
     @torch.no_grad()

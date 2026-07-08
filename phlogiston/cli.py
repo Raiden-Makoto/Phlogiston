@@ -131,6 +131,51 @@ def _cmd_train(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_train_cdvae(args: argparse.Namespace) -> int:
+    from phlogiston.train import train_cdvae
+
+    train_cdvae(
+        args.data_root,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        latent_dim=args.latent_dim,
+        mul=args.mul,
+        n_layers=args.n_layers,
+        correlation=args.correlation,
+        n_max=args.n_max,
+        beta=args.beta,
+        ema_decay=args.ema_decay,
+        grad_clip=args.grad_clip,
+        stable_max=args.stable_max,
+        max_shards=args.max_shards,
+        out_dir=args.out_dir,
+        resume=args.resume,
+        warmup_epochs=args.warmup_epochs,
+        patience=args.patience,
+        num_workers=args.num_workers,
+    )
+    return 0
+
+
+def _cmd_discover(args: argparse.Namespace) -> int:
+    from phlogiston.discovery import discover, format_report
+
+    ranked = discover(
+        args.generator,
+        args.predictor,
+        args.data_root,
+        n_samples=args.n_samples,
+        steps_per_level=args.steps_per_level,
+        e_hull_max=args.e_hull_max,
+        rho_max=args.rho_max,
+        do_dedup=not args.no_dedup,
+        check_novelty=not args.no_novelty,
+    )
+    print("\n" + format_report(ranked, top_k=args.top_k))
+    return 0
+
+
 def _cmd_evaluate(args: argparse.Namespace) -> int:
     from phlogiston.train import evaluate_checkpoint
 
@@ -394,6 +439,44 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--max-shards", type=int, default=None)
     ev.add_argument("--num-workers", type=int, default=4)
     ev.set_defaults(func=_cmd_evaluate)
+
+    tc = sub.add_parser("train-cdvae", help="Train the CDVAE generator (EMA + composite loss)")
+    tc.add_argument("--epochs", type=int, default=30)
+    tc.add_argument("--batch-size", type=int, default=256)
+    tc.add_argument("--lr", type=float, default=1e-3)
+    tc.add_argument("--latent-dim", type=int, default=256)
+    tc.add_argument("--mul", type=int, default=128)
+    tc.add_argument("--n-layers", type=int, default=3)
+    tc.add_argument("--correlation", type=int, default=2)
+    tc.add_argument("--n-max", type=int, default=64, help="Max atoms per generated cell")
+    tc.add_argument("--beta", type=float, default=0.01, help="KL weight (VAE regularization)")
+    tc.add_argument("--ema-decay", type=float, default=0.999)
+    tc.add_argument("--grad-clip", type=float, default=5.0)
+    tc.add_argument(
+        "--stable-max",
+        type=float,
+        default=None,
+        help="Train only on structures with e_above_hull <= this (eV/atom)",
+    )
+    tc.add_argument("--max-shards", type=int, default=None)
+    tc.add_argument("--out-dir", default="runs")
+    tc.add_argument("--resume", default=None)
+    tc.add_argument("--warmup-epochs", type=int, default=2)
+    tc.add_argument("--patience", type=int, default=8)
+    tc.add_argument("--num-workers", type=int, default=4)
+    tc.set_defaults(func=_cmd_train_cdvae)
+
+    dc = sub.add_parser("discover", help="Generate -> screen -> rank novel stable candidates")
+    dc.add_argument("--generator", required=True, help="CDVAE checkpoint (.pt)")
+    dc.add_argument("--predictor", required=True, help="Predictor checkpoint (.pt)")
+    dc.add_argument("--n-samples", type=int, default=128)
+    dc.add_argument("--steps-per-level", type=int, default=4)
+    dc.add_argument("--e-hull-max", type=float, default=0.1, help="Stability gate (eV/atom)")
+    dc.add_argument("--rho-max", type=float, default=None, help="Density ceiling (g/cm^3)")
+    dc.add_argument("--top-k", type=int, default=10)
+    dc.add_argument("--no-dedup", action="store_true")
+    dc.add_argument("--no-novelty", action="store_true")
+    dc.set_defaults(func=_cmd_discover)
 
     return p
 
