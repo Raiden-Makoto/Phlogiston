@@ -50,12 +50,25 @@ def sample_candidates(generator: CDVAE, n: int, steps_per_level: int = 4) -> lis
     return structures
 
 
+def load_latent_head(head_ckpt: str, latent_dim: int, device: str):
+    """Load a fitted LatentPropertyHead from a checkpoint."""
+    from phlogiston.models.cdvae import LatentPropertyHead
+
+    ckpt = torch.load(head_ckpt, map_location=device)
+    head = LatentPropertyHead(latent_dim, hidden=ckpt.get("hidden", 256)).to(device)
+    head.load_state_dict(ckpt["model"])
+    return head.eval()
+
+
 def discover(
     generator_ckpt: str,
     predictor_ckpt: str,
     data_root: str = "data",
     *,
     stability_ckpt: str | None = None,
+    latent_head_ckpt: str | None = None,
+    profile: dict[str, float] | None = None,
+    cond_steps: int = 200,
     n_samples: int = 128,
     steps_per_level: int = 4,
     e_hull_max: float = 0.1,
@@ -71,6 +84,10 @@ def discover(
     ``stability_ckpt`` (recommended) is a separate stability-specialist model
     used for the gate; ``predictor_ckpt`` scores the mechanical/thermal
     properties. If omitted, the property model gates too.
+
+    ``latent_head_ckpt`` (optional) enables **property-conditioned** generation:
+    latents are gradient-ascended toward ``profile`` before decoding, instead of
+    sampled unconditionally.
     """
 
     def log(m):
@@ -86,8 +103,18 @@ def discover(
         log("[discover] decoupled gate: stability from a separate specialist model")
     screen = PropertyScreen(predictor, stability_model=stability_model, device=device)
 
-    log(f"[discover] sampling {n_samples} candidates ...")
-    structures = sample_candidates(generator, n_samples, steps_per_level)
+    if latent_head_ckpt is not None:
+        from phlogiston.models.cdvae import generate_conditioned
+
+        head = load_latent_head(latent_head_ckpt, generator.latent_dim, device)
+        log(f"[discover] property-conditioned generation of {n_samples} candidates ...")
+        structures = generate_conditioned(
+            generator, head, n_samples, profile=profile,
+            steps=cond_steps, steps_per_level=steps_per_level, device=device,
+        )
+    else:
+        log(f"[discover] sampling {n_samples} candidates (unconditional) ...")
+        structures = sample_candidates(generator, n_samples, steps_per_level)
     log(f"[discover] {len(structures)} valid structures generated")
 
     scored = screen.score(structures)

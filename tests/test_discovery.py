@@ -131,6 +131,34 @@ def test_novelty_and_dedup():
     _check("dedup collapses identical structures", len(uniq) == 1, f"n={len(uniq)}")
 
 
+def test_latent_conditioning():
+    from phlogiston.models.cdvae.conditioning import (
+        LatentPropertyHead,
+        generate_conditioned,
+        optimize_latent,
+        profile_weights,
+    )
+
+    m = CDVAE(latent_dim=16, mul=16, n_max=16, n_elements=100, n_levels=5, n_layers=2, correlation=1)
+    head = LatentPropertyHead(latent_dim=16, hidden=32)
+    w = profile_weights()
+    alpha = 0.01
+
+    def obj(z):
+        return (head(z) * w).sum(-1) - alpha * (z * z).sum(-1)
+
+    z0 = torch.zeros(4, 16)
+    with torch.no_grad():
+        base = obj(z0).mean().item()
+    z = optimize_latent(head, 4, steps=100, lr=0.1, alpha=alpha, z0=z0, seed=0)
+    with torch.no_grad():
+        new = obj(z).mean().item()
+    _check("optimize_latent increases the profile objective", new > base, f"{base:.3f} -> {new:.3f}")
+
+    structs = generate_conditioned(m, head, 2, steps=10, steps_per_level=1)
+    _check("generate_conditioned returns structures", len(structs) >= 1, f"n={len(structs)}")
+
+
 if __name__ == "__main__":
     test_ema()
     test_sample_returns_structure()
@@ -139,6 +167,7 @@ if __name__ == "__main__":
     test_ranking_and_pareto()
     test_multi_objective_score_range()
     test_novelty_and_dedup()
+    test_latent_conditioning()
     n_fail = sum(1 for _, ok, _ in _results if not ok)
     print(f"\n{len(_results) - n_fail}/{len(_results)} passed")
     sys.exit(1 if n_fail else 0)

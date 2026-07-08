@@ -159,6 +159,28 @@ def _cmd_train_cdvae(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_fit_latent_head(args: argparse.Namespace) -> int:
+    import torch
+
+    from phlogiston.discovery.loop import load_generator
+    from phlogiston.models.cdvae import fit_latent_property_head
+
+    gen = load_generator(args.generator)
+    head = fit_latent_property_head(
+        gen,
+        args.data_root,
+        hidden=args.hidden,
+        epochs=args.epochs,
+        lr=args.lr,
+        max_shards=args.max_shards,
+        num_workers=args.num_workers,
+    )
+    torch.save({"model": head.state_dict(), "hidden": args.hidden, "latent_dim": gen.latent_dim},
+               args.out)
+    print(f"[fit-latent-head] saved -> {args.out}")
+    return 0
+
+
 def _cmd_discover(args: argparse.Namespace) -> int:
     from phlogiston.discovery import discover, format_report
 
@@ -167,6 +189,8 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         args.predictor,
         args.data_root,
         stability_ckpt=args.stability_ckpt,
+        latent_head_ckpt=args.latent_head,
+        cond_steps=args.cond_steps,
         n_samples=args.n_samples,
         steps_per_level=args.steps_per_level,
         e_hull_max=args.e_hull_max,
@@ -491,7 +515,23 @@ def build_parser() -> argparse.ArgumentParser:
     dc.add_argument("--top-k", type=int, default=10)
     dc.add_argument("--no-dedup", action="store_true")
     dc.add_argument("--no-novelty", action="store_true")
+    dc.add_argument(
+        "--latent-head",
+        default=None,
+        help="Fitted latent property head (.pt) -> property-conditioned generation",
+    )
+    dc.add_argument("--cond-steps", type=int, default=200, help="Latent-optimization steps")
     dc.set_defaults(func=_cmd_discover)
+
+    fh = sub.add_parser("fit-latent-head", help="Fit f_p(z) on a CDVAE for conditioning")
+    fh.add_argument("--generator", required=True, help="CDVAE checkpoint (.pt)")
+    fh.add_argument("--out", required=True, help="Output path for the fitted head (.pt)")
+    fh.add_argument("--hidden", type=int, default=256)
+    fh.add_argument("--epochs", type=int, default=100)
+    fh.add_argument("--lr", type=float, default=1e-3)
+    fh.add_argument("--max-shards", type=int, default=None)
+    fh.add_argument("--num-workers", type=int, default=4)
+    fh.set_defaults(func=_cmd_fit_latent_head)
 
     return p
 
