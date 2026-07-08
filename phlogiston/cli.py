@@ -125,6 +125,22 @@ def _cmd_train(args: argparse.Namespace) -> int:
         patience=args.patience,
         num_workers=args.num_workers,
         compile=args.compile,
+        select_by=args.select_by,
+    )
+    return 0
+
+
+def _cmd_evaluate(args: argparse.Namespace) -> int:
+    from phlogiston.train import evaluate_checkpoint
+
+    evaluate_checkpoint(
+        args.ckpt,
+        args.data_root,
+        split=args.split,
+        stage=args.stage,
+        batch_size=args.batch_size,
+        max_shards=args.max_shards,
+        num_workers=args.num_workers,
     )
     return 0
 
@@ -355,7 +371,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="torch.compile the model (fuses e3nn kernels; experimental on ROCm)",
     )
+    tr.add_argument(
+        "--select-by",
+        default=None,
+        choices=["loss", "auc", "r2"],
+        help="Best-checkpoint metric (default: stage 1 -> auc, stage 2 -> r2)",
+    )
     tr.set_defaults(func=_cmd_train)
+
+    ev = sub.add_parser("evaluate", help="Score a checkpoint (MAE + R2 + stability AUC/AP)")
+    ev.add_argument("--ckpt", required=True, help="Path to a saved checkpoint (.pt)")
+    ev.add_argument("--split", default="val", choices=["train", "val", "test"])
+    ev.add_argument("--stage", type=int, default=2, choices=[1, 2])
+    ev.add_argument("--batch-size", type=int, default=512)
+    ev.add_argument("--max-shards", type=int, default=None)
+    ev.add_argument("--num-workers", type=int, default=4)
+    ev.set_defaults(func=_cmd_evaluate)
 
     return p
 

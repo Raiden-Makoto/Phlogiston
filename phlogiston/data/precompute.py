@@ -30,7 +30,7 @@ from tqdm import tqdm
 
 from phlogiston.data import gnome
 from phlogiston.data import materials_project as mp
-from phlogiston.data.dataset import TARGET_KEYS
+from phlogiston.data.dataset import TARGET_BOUNDS, TARGET_KEYS
 from phlogiston.data.graph import structure_to_graph
 
 DENSITY_IDX = TARGET_KEYS.index("density")
@@ -60,7 +60,11 @@ def _vector_from_labels(labels: dict) -> tuple[list[float], list[bool]]:
                 vals[i] = float(v)
             except (TypeError, ValueError):
                 pass
-    mask = [bool(np.isfinite(v)) for v in vals]
+    # finite AND within physical bounds (drops unphysical MP/derived outliers)
+    mask = []
+    for k, v in zip(TARGET_KEYS, vals, strict=False):
+        lo, hi = TARGET_BOUNDS[k]
+        mask.append(bool(np.isfinite(v) and lo <= v <= hi))
     vals = [v if m else 0.0 for v, m in zip(vals, mask, strict=False)]
     return vals, mask
 

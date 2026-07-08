@@ -53,14 +53,29 @@ shards ──► ShardedCrystalDataset ──► split(train/val/test)
   (per-target mean over present labels).
 - **Optimizer**: AdamW; **schedule**: linear LR **warmup** (`--warmup-epochs`)
   then cosine anneal.
-- **Early stopping**: stop after `--patience` epochs without val-loss improvement
-  (0 disables); the `_best.pt` checkpoint holds the best model.
-- **Eval**: `evaluate()` returns per-target **MAE in physical units** over masked
-  val entries (all-reduced across ranks under DDP).
+- **Best-checkpoint / early stopping**: selection is by a **stage-aware metric**
+  (`--select-by`, default stage 1 → stability **AUC**, stage 2 → mean property
+  **R²**; `loss` selects by val_loss). Higher-is-better metrics are negated and
+  NaN falls back to `val_loss`. `--patience` epochs without improvement on that
+  metric stops training (0 disables); `_best.pt` holds the best model.
+  Rationale: for stage 2, `val_loss` is diluted by the easy stability targets,
+  so a low-loss checkpoint can still be mediocre on the mech/thermal properties.
+- **Eval**: `evaluate()` returns, over masked val entries (all-reduced/gathered
+  across ranks under DDP):
+  - per-target **MAE** in physical units;
+  - per-target **R²** (`1 − SS_res/SS_tot`) — flags "predicts the mean" cases
+    that MAE alone hides;
+  - **stability ROC-AUC + average precision (AP)** for `energy_above_hull`
+    (positive class = unstable, i.e. `e_hull > threshold`) — the imbalance-aware
+    separation metric, since ~98% of rows are stable and MAE looks small
+    regardless.
+  These are logged every epoch. `evaluate_checkpoint()` (CLI: `phlogiston
+  evaluate --ckpt … --split {val,test}`) scores any saved checkpoint standalone.
 - **Checkpoint**: rank 0 saves a **per-epoch** `_last.pt` and a **best-by-val-loss**
   `_best.pt` under `out_dir/predictor_stage{N}_{last,best}.pt`. Each contains
-  `{model, stage, mean, std, epoch, optimizer, scheduler, best_val}` — enough to
-  **resume** mid-training (`--resume`). `--init-ckpt` instead warm-starts weights
+  `{model, stage, mean, std, epoch, optimizer, scheduler, best_val, hparams}` —
+  enough to **resume** mid-training (`--resume`) and to reconstruct the
+  architecture for standalone eval. `--init-ckpt` instead warm-starts weights
   only (for stage 1 → stage 2).
 
 ## 4. Multi-GPU (data-parallel, not tensor-parallel)

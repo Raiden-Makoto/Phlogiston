@@ -35,10 +35,43 @@ TARGET_KEYS: tuple[str, ...] = (
 )
 
 
+# Per-target physically-plausible ranges (inclusive). Labels outside these are
+# treated as *absent* (mask False), not just NaN. Rationale: the Materials
+# Project elasticity table contains unphysical outliers (negative or
+# thousands-of-GPa moduli), and the nonlinear derived formulas (Vickers ~
+# G^0.585, Slack ~ theta_D^3 / gamma^2) amplify those into astronomically large
+# values (1e16+). A single such label poisons the per-target mean/std, which in
+# turn inflates physical-unit MAE (= standardized error x std) to nonsense.
+TARGET_BOUNDS: dict[str, tuple[float, float]] = {
+    "formation_energy_per_atom": (-10.0, 10.0),  # eV/atom
+    # For MP this is e_above_hull (>=0); for GNoME the column holds the
+    # *decomposition energy*, which is negative for novel below-hull materials
+    # (the discovery signal, observed down to ~-2.5). Lower bound must stay
+    # generous so we don't mask those out; only absurd values are dropped.
+    "energy_above_hull": (-6.0, 10.0),  # eV/atom
+    "density": (0.1, 30.0),  # g/cm^3
+    "bulk_modulus_vrh": (1.0, 1000.0),  # GPa (diamond ~440)
+    "shear_modulus_vrh": (1.0, 800.0),  # GPa
+    "vickers_hardness": (0.0, 200.0),  # GPa (diamond ~90-100)
+    "fracture_toughness": (0.0, 100.0),  # MPa*m^0.5
+    "debye_temperature": (1.0, 3000.0),  # K (diamond ~2200)
+    "slack_thermal_conductivity": (0.0, 5000.0),  # W/m/K (diamond ~2000-3000)
+}
+_BOUND_LO = torch.tensor([TARGET_BOUNDS[k][0] for k in TARGET_KEYS])
+_BOUND_HI = torch.tensor([TARGET_BOUNDS[k][1] for k in TARGET_KEYS])
+
+
+def physical_mask(vals: torch.Tensor) -> torch.Tensor:
+    """Per-target validity: finite AND within the physical bounds. Shape [..., T]."""
+    lo = _BOUND_LO.to(vals)
+    hi = _BOUND_HI.to(vals)
+    return torch.isfinite(vals) & (vals >= lo) & (vals <= hi)
+
+
 def targets_to_vector(row: dict) -> tuple[torch.Tensor, torch.Tensor]:
     """Build (target_vector, mask) for TARGET_KEYS from a label dict.
 
-    Missing / NaN entries get value 0 and mask False.
+    Missing / NaN / physically-implausible entries get value 0 and mask False.
     """
     vals = np.full(len(TARGET_KEYS), np.nan, dtype=np.float64)
     for i, k in enumerate(TARGET_KEYS):
@@ -48,9 +81,10 @@ def targets_to_vector(row: dict) -> tuple[torch.Tensor, torch.Tensor]:
                 vals[i] = float(v)
             except (TypeError, ValueError):
                 pass
-    mask = np.isfinite(vals)
-    vals = np.where(mask, vals, 0.0)
-    return torch.from_numpy(vals).float(), torch.from_numpy(mask)
+    t = torch.from_numpy(vals).float()
+    mask = physical_mask(t)
+    t = torch.where(mask, t, torch.zeros_like(t))
+    return t, mask
 
 
 @dataclass
@@ -192,5 +226,8 @@ class ShardedCrystalDataset(Dataset):
             num_nodes=int(gd["num_nodes"]),
         )
         y = torch.tensor(r["y"], dtype=torch.float32)
-        m = torch.tensor(r["mask"], dtype=torch.bool)
+        # Re-apply physical bounds on load: existing shards were written before
+        # bounds-checking, so drop out-of-range labels (mask them absent) here.
+        m = torch.tensor(r["mask"], dtype=torch.bool) & physical_mask(y)
+        y = torch.where(m, y, torch.zeros_like(y))
         return g, y, m

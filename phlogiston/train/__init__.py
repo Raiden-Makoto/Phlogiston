@@ -3,8 +3,15 @@
 from phlogiston.train.trainer import (
     compute_normalization,
     evaluate,
+    evaluate_checkpoint,
     split_indices,
     train,
 )
 
-__all__ = ["train", "evaluate", "split_indices", "compute_normalization"]
+__all__ = [
+    "train",
+    "evaluate",
+    "evaluate_checkpoint",
+    "split_indices",
+    "compute_normalization",
+]

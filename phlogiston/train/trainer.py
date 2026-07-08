@@ -21,7 +21,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, Subset
 from torch.utils.data.distributed import DistributedSampler
 
-from phlogiston.data.dataset import ShardedCrystalDataset, collate
+from phlogiston.data.dataset import ShardedCrystalDataset, collate, physical_mask
 from phlogiston.models.predictor import PREDICT_KEYS, STABILITY_KEYS, Predictor
 
 _LABELS = {
@@ -69,8 +69,11 @@ def compute_normalization(dataset, indices, pred_idx: torch.Tensor):
     for i in indices:
         if records is not None:
             r = records[i]
-            y = torch.tensor(r["y"], dtype=torch.float64)[pred_idx]
-            m = torch.tensor(r["mask"], dtype=torch.float64)[pred_idx]
+            yf = torch.tensor(r["y"], dtype=torch.float64)
+            # match __getitem__: drop physically-implausible labels (poison std)
+            mf = torch.tensor(r["mask"], dtype=torch.bool) & physical_mask(yf)
+            y = yf[pred_idx]
+            m = mf.double()[pred_idx]
         else:
             _, y, m = dataset[i]
             y = y[pred_idx].double()
@@ -97,8 +100,13 @@ def _build_scheduler(opt, epochs: int, warmup_epochs: int):
     return SequentialLR(opt, [warm, cos], milestones=[w])
 
 
-def _save_ckpt(path, base, stage, mean, std, epoch, opt, sched, best_val):
-    """Full checkpoint: weights + norm stats + optimizer/scheduler for resume."""
+def _save_ckpt(path, base, stage, mean, std, epoch, opt, sched, best_val, hparams=None):
+    """Full checkpoint: weights + norm stats + optimizer/scheduler for resume.
+
+    ``hparams`` records the architecture (mul/n_layers/correlation) so a
+    checkpoint can be reconstructed for standalone evaluation without knowing
+    the original CLI flags.
+    """
     torch.save(
         {
             "model": base.state_dict(),
@@ -109,6 +117,7 @@ def _save_ckpt(path, base, stage, mean, std, epoch, opt, sched, best_val):
             "optimizer": opt.state_dict(),
             "scheduler": sched.state_dict(),
             "best_val": best_val,
+            "hparams": hparams or {},
         },
         path,
     )
@@ -124,39 +133,108 @@ def _stage_mask(mask, stage: int):
     return mask & keep
 
 
-@torch.no_grad()
-def evaluate(model, loader, device, stage: int = 2, distributed: bool = False):
-    """Return (per-target MAE dict in physical units, standardized val loss).
+def _stability_metrics(pred_ehull, true_ehull, threshold, distributed):
+    """ROC-AUC + average-precision for unstable (e_above_hull > threshold)."""
+    import numpy as np
 
-    The scalar val loss (masked Huber in standardized space) is comparable across
-    targets and is used for best-checkpoint selection; MAEs are for reporting.
-    All quantities are all-reduced under DDP.
+    if distributed:
+        gathered_p, gathered_t = [None] * dist.get_world_size(), [None] * dist.get_world_size()
+        dist.all_gather_object(gathered_p, pred_ehull.cpu().tolist())
+        dist.all_gather_object(gathered_t, true_ehull.cpu().tolist())
+        p = np.array([x for sub in gathered_p for x in sub])
+        y = np.array([x for sub in gathered_t for x in sub])
+    else:
+        p, y = pred_ehull.cpu().numpy(), true_ehull.cpu().numpy()
+
+    if len(y) == 0:
+        return {"auc": float("nan"), "ap": float("nan"), "frac_unstable": float("nan")}
+    label = (y > threshold).astype(int)  # positive class = unstable (the minority)
+    frac = float(label.mean())
+    if label.min() == label.max():  # only one class present -> AUC undefined
+        return {"auc": float("nan"), "ap": float("nan"), "frac_unstable": frac}
+    from sklearn.metrics import average_precision_score, roc_auc_score
+
+    return {"auc": float(roc_auc_score(label, p)),
+            "ap": float(average_precision_score(label, p)), "frac_unstable": frac}
+
+
+def _selection_score(select_by, metrics, report_keys, val_loss):
+    """Lower-is-better scalar for best-checkpoint selection.
+
+    ``auc``/``r2`` are higher-is-better, so we negate them; if the metric is
+    NaN (e.g. degenerate val fold, or no property labels present) we fall back
+    to ``val_loss`` so checkpointing never stalls.
+    """
+    import math
+
+    if select_by == "loss":
+        return val_loss
+    if select_by == "auc":
+        auc = metrics["stability"]["auc"]
+        return -auc if not math.isnan(auc) else val_loss
+    # "r2": mean over the stage-relevant targets
+    vals = [metrics["r2"][k] for k in report_keys]
+    vals = [v for v in vals if not math.isnan(v)]
+    return -(sum(vals) / len(vals)) if vals else val_loss
+
+
+@torch.no_grad()
+def evaluate(model, loader, device, stage: int = 2, distributed: bool = False,
+             stability_threshold: float = 0.0):
+    """Per-target MAE + R² (physical units), standardized val loss, and stability
+    ROC-AUC/AP for energy_above_hull. All all-reduced/gathered under DDP.
+
+    Why more than MAE: R² catches "predicts the mean" (low MAE, no variance
+    explained); AUC/AP catch poor stable/unstable separation under the ~98%
+    class imbalance despite a small e-hull MAE.
     """
     model.eval()
     base = _unwrap(model)
     t = base.n_targets
-    abs_err = torch.zeros(t, device=device)
-    cnt = torch.zeros(t, device=device)
+    z = lambda: torch.zeros(t, device=device)  # noqa: E731
+    abs_err, sq_err, sum_y, sum_y2, cnt = z(), z(), z(), z(), z()
     loss_sum = torch.zeros(1, device=device)
     n_batches = torch.zeros(1, device=device)
+    ehull = PREDICT_KEYS.index("energy_above_hull")
+    ep, et = [], []
     for batch in loader:
         batch = batch.to(device)
         pred = model(batch)
         y, mask = base.slice_targets(batch.y, batch.y_mask)
         mask = _stage_mask(mask, stage)
-        abs_err += (pred - y).abs().mul(mask.float()).sum(0)
-        cnt += mask.float().sum(0)
+        mf = mask.float()
+        diff = pred - y
+        abs_err += diff.abs().mul(mf).sum(0)
+        sq_err += (diff * diff).mul(mf).sum(0)
+        sum_y += y.mul(mf).sum(0)
+        sum_y2 += (y * y).mul(mf).sum(0)
+        cnt += mf.sum(0)
         loss, _ = base.loss(pred, y, mask)
         loss_sum += loss.detach()
         n_batches += 1
+        m = mask[:, ehull]
+        if m.any():
+            ep.append(pred[m, ehull].detach())
+            et.append(y[m, ehull].detach())
     if distributed:
-        dist.all_reduce(abs_err)
-        dist.all_reduce(cnt)
-        dist.all_reduce(loss_sum)
-        dist.all_reduce(n_batches)
-    mae = (abs_err / cnt.clamp(min=1)).cpu()
+        for tns in (abs_err, sq_err, sum_y, sum_y2, cnt, loss_sum, n_batches):
+            dist.all_reduce(tns)
+
+    c = cnt.clamp(min=1)
+    mae = (abs_err / c).cpu()
+    ss_tot = (sum_y2 - sum_y * sum_y / c).clamp(min=1e-8)
+    r2 = (1 - sq_err / ss_tot).cpu()
     val_loss = (loss_sum / n_batches.clamp(min=1)).item()
-    return {k: mae[i].item() for i, k in enumerate(PREDICT_KEYS)}, val_loss
+    stab = _stability_metrics(
+        torch.cat(ep) if ep else torch.zeros(0, device=device),
+        torch.cat(et) if et else torch.zeros(0, device=device),
+        stability_threshold, distributed)
+    return {
+        "mae": {k: mae[i].item() for i, k in enumerate(PREDICT_KEYS)},
+        "r2": {k: r2[i].item() for i, k in enumerate(PREDICT_KEYS)},
+        "val_loss": val_loss,
+        "stability": stab,
+    }
 
 
 def train(
@@ -180,8 +258,17 @@ def train(
     patience: int = 20,
     num_workers: int = 4,
     compile: bool = False,
+    select_by: str | None = None,
     seed: int = 42,
 ):
+    # Best-checkpoint selection metric. Default is stage-aware: stability AUC
+    # for stage 1 (discrimination is the goal), mean property R² for stage 2
+    # (val_loss would be diluted by the easy stability targets). All are
+    # NaN-guarded and fall back to val_loss.
+    if select_by is None:
+        select_by = "auc" if stage == 1 else "r2"
+    if select_by not in ("loss", "auc", "r2"):
+        raise ValueError(f"select_by must be loss|auc|r2, got {select_by!r}")
     if num_workers > 0:
         # DataLoader workers return batches (tensors) via IPC; the file_system
         # sharing strategy avoids file-descriptor exhaustion with many tensors.
@@ -203,7 +290,10 @@ def train(
 
     if is_main:
         Path(out_dir).mkdir(parents=True, exist_ok=True)
-    log(f"[train] stage {stage} | world {world} | device {device} | loading data ...")
+    log(
+        f"[train] stage {stage} | world {world} | device {device} | "
+        f"select best by '{select_by}' | loading data ..."
+    )
 
     dataset = ShardedCrystalDataset(data_root, max_shards=max_shards)
     tr, va, te = split_indices(len(dataset), seed=seed)  # identical across ranks
@@ -297,33 +387,43 @@ def train(
             running += loss.item()
             n_batches += 1
         sched.step()
-        val_mae, val_loss = evaluate(model, val_loader, device, stage, distributed)
+        metrics = evaluate(model, val_loader, device, stage, distributed)
+        val_loss = metrics["val_loss"]
         # report the stage-relevant targets (stability for stage 1; the
         # mechanical/thermal properties for stage 2)
         report_keys = (
             STABILITY_KEYS if stage == 1 else [k for k in PREDICT_KEYS if k not in STABILITY_KEYS]
         )
-        stab = ", ".join(f"{_LABELS[k]}={val_mae[k]:.3f}" for k in report_keys)
-        improved = val_loss < best_val
+        mae_s = ", ".join(f"{_LABELS[k]}={metrics['mae'][k]:.3f}" for k in report_keys)
+        r2_s = ", ".join(f"{_LABELS[k]}={metrics['r2'][k]:.2f}" for k in report_keys)
+        st = metrics["stability"]
+        # selection score: lower-is-better (negate metrics where higher=better),
+        # NaN-safe fall back to val_loss so we always keep checkpointing.
+        score = _selection_score(select_by, metrics, report_keys, val_loss)
+        improved = score < best_val
         if improved:
-            best_val = val_loss
+            best_val = score
             epochs_no_improve = 0
         else:
             epochs_no_improve += 1
         log(
             f"[train] epoch {epoch + 1}/{epochs} loss={running / max(n_batches, 1):.4f} "
-            f"val_loss={val_loss:.4f}{' *' if improved else ''} val_MAE({stab}) "
+            f"val_loss={val_loss:.4f} | MAE({mae_s}) | "
+            f"R2({r2_s}) | stab AUC={st['auc']:.3f} AP={st['ap']:.3f} | "
+            f"select[{select_by}]={score:.4f}{' *' if improved else ''} "
             f"{time.time() - t0:.1f}s"
         )
-        if is_main:  # per-epoch resumable checkpoint (+ best-by-val-loss)
-            _save_ckpt(last_path, base, stage, mean, std, epoch, opt, sched, best_val)
+        if is_main:  # per-epoch resumable checkpoint (+ best-by-selection-metric)
+            hp = {"mul": mul, "n_layers": n_layers, "correlation": correlation}
+            _save_ckpt(last_path, base, stage, mean, std, epoch, opt, sched, best_val, hp)
             if improved:
-                _save_ckpt(best_path, base, stage, mean, std, epoch, opt, sched, best_val)
+                _save_ckpt(best_path, base, stage, mean, std, epoch, opt, sched, best_val, hp)
 
         if patience > 0 and epochs_no_improve >= patience:
             log(
                 f"[train] early stopping at epoch {epoch + 1} "
-                f"(no val improvement for {patience} epochs; best_val={best_val:.4f})"
+                f"(no {select_by} improvement for {patience} epochs; "
+                f"best[{select_by}]={best_val:.4f})"
             )
             break
 
@@ -332,3 +432,53 @@ def train(
     if distributed:
         dist.destroy_process_group()
     return str(best_path)
+
+
+def evaluate_checkpoint(
+    ckpt_path: str,
+    data_root: str,
+    split: str = "val",
+    stage: int = 2,
+    batch_size: int = 512,
+    max_shards: int | None = None,
+    num_workers: int = 4,
+    device: str | None = None,
+    seed: int = 42,
+):
+    """Score a saved checkpoint on the val/test split: MAE + R² per target and
+    stability ROC-AUC/AP. Single-process (no DDP); mirrors train()'s split/norm.
+    """
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    ckpt = torch.load(ckpt_path, map_location=device)
+    # infer architecture from checkpoint (fall back to defaults if absent)
+    hp = ckpt.get("hparams", {})
+    model = Predictor(
+        mul=hp.get("mul", 128),
+        n_layers=hp.get("n_layers", 2),
+        correlation=hp.get("correlation", 3),
+    ).to(device)
+    model.load_state_dict(ckpt["model"])
+    model.set_normalization(ckpt["mean"].to(device), ckpt["std"].to(device))
+
+    dataset = ShardedCrystalDataset(data_root, max_shards=max_shards)
+    tr, va, te = split_indices(len(dataset), seed=seed)
+    idx = {"train": tr, "val": va, "test": te}[split]
+    loader = DataLoader(
+        Subset(dataset, idx),
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=collate,
+        num_workers=num_workers,
+    )
+    print(f"[eval] {ckpt_path} on {split} split ({len(idx):,} graphs), stage {stage}", flush=True)
+    metrics = evaluate(model, loader, device, stage=stage, distributed=False)
+    st = metrics["stability"]
+    print(f"[eval] val_loss={metrics['val_loss']:.4f}")
+    print(f"[eval] {'target':<28}{'MAE':>12}{'R2':>10}")
+    for k in PREDICT_KEYS:
+        print(f"[eval]   {_LABELS.get(k, k):<26}{metrics['mae'][k]:>12.4f}{metrics['r2'][k]:>10.3f}")
+    print(
+        f"[eval] stability (Ehull>{0.0:.2f}): AUC={st['auc']:.3f} AP={st['ap']:.3f} "
+        f"frac_unstable={st['frac_unstable']:.3f}"
+    )
+    return metrics
