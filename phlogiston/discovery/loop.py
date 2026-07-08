@@ -55,6 +55,7 @@ def discover(
     predictor_ckpt: str,
     data_root: str = "data",
     *,
+    stability_ckpt: str | None = None,
     n_samples: int = 128,
     steps_per_level: int = 4,
     e_hull_max: float = 0.1,
@@ -65,7 +66,12 @@ def discover(
     device: str | None = None,
     verbose: bool = True,
 ):
-    """Run the full loop and return ranked, novel, stable candidates."""
+    """Run the full loop and return ranked, novel, stable candidates.
+
+    ``stability_ckpt`` (recommended) is a separate stability-specialist model
+    used for the gate; ``predictor_ckpt`` scores the mechanical/thermal
+    properties. If omitted, the property model gates too.
+    """
 
     def log(m):
         if verbose:
@@ -75,7 +81,10 @@ def discover(
     log(f"[discover] loading generator + predictor on {device} ...")
     generator = load_generator(generator_ckpt, device)
     predictor = load_predictor(predictor_ckpt, device)
-    screen = PropertyScreen(predictor, device=device)
+    stability_model = load_predictor(stability_ckpt, device) if stability_ckpt else None
+    if stability_model is not None:
+        log("[discover] decoupled gate: stability from a separate specialist model")
+    screen = PropertyScreen(predictor, stability_model=stability_model, device=device)
 
     log(f"[discover] sampling {n_samples} candidates ...")
     structures = sample_candidates(generator, n_samples, steps_per_level)

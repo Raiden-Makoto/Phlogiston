@@ -65,6 +65,29 @@ def test_property_screen():
     _check("PropertyScreen scores all targets + density", bool(ok), f"n={len(scored)}")
 
 
+def test_decoupled_screen():
+    # decoupled: stability columns must come from the stability_model. Force the
+    # stability model to emit a distinctive constant for energy_above_hull.
+    from phlogiston.models.predictor import PREDICT_KEYS, STABILITY_KEYS
+
+    prop = Predictor(mul=16, n_layers=2, correlation=1)
+    stab = Predictor(mul=16, n_layers=2, correlation=1)
+    # make stab predict a fixed, recognizable value for every target
+    with torch.no_grad():
+        for h in stab.heads:
+            for p in h.parameters():
+                p.zero_()
+        stab.target_mean.fill_(-7.5)  # de-standardized output == mean when head==0
+    screen = PropertyScreen(prop, stability_model=stab, device="cpu")
+    scored = screen.score([_toy_structure()])
+    ehull_col = PREDICT_KEYS.index("energy_above_hull")
+    ok = ehull_col in [PREDICT_KEYS.index(k) for k in STABILITY_KEYS] and abs(
+        scored[0].properties["energy_above_hull"] - (-7.5)
+    ) < 1e-3
+    _check("decoupled screen takes stability from stability_model", bool(ok),
+           f"Ehull={scored[0].properties['energy_above_hull']:.2f}")
+
+
 def test_ranking_and_pareto():
     # a dominates b on every objective; c trades off
     a = _candidate({"bulk_modulus_vrh": 300, "shear_modulus_vrh": 200, "density": 3.0,
@@ -112,6 +135,7 @@ if __name__ == "__main__":
     test_ema()
     test_sample_returns_structure()
     test_property_screen()
+    test_decoupled_screen()
     test_ranking_and_pareto()
     test_multi_objective_score_range()
     test_novelty_and_dedup()

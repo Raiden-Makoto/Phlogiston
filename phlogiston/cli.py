@@ -166,6 +166,7 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         args.generator,
         args.predictor,
         args.data_root,
+        stability_ckpt=args.stability_ckpt,
         n_samples=args.n_samples,
         steps_per_level=args.steps_per_level,
         e_hull_max=args.e_hull_max,
@@ -475,7 +476,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     dc = sub.add_parser("discover", help="Generate -> screen -> rank novel stable candidates")
     dc.add_argument("--generator", required=True, help="CDVAE checkpoint (.pt)")
-    dc.add_argument("--predictor", required=True, help="Predictor checkpoint (.pt)")
+    dc.add_argument(
+        "--predictor", required=True, help="Property Predictor checkpoint (.pt)"
+    )
+    dc.add_argument(
+        "--stability-ckpt",
+        default=None,
+        help="Separate stability specialist for the gate (recommended: Stage-1 best)",
+    )
     dc.add_argument("--n-samples", type=int, default=128)
     dc.add_argument("--steps-per-level", type=int, default=4)
     dc.add_argument("--e-hull-max", type=float, default=0.1, help="Stability gate (eV/atom)")

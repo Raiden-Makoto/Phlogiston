@@ -12,7 +12,7 @@ import torch
 
 from phlogiston.data.dataset import collate
 from phlogiston.data.graph import structure_to_graph
-from phlogiston.models.predictor import PREDICT_KEYS, Predictor
+from phlogiston.models.predictor import PREDICT_KEYS, STABILITY_KEYS, Predictor
 
 
 def load_predictor(ckpt_path: str, device: str | None = None) -> Predictor:
@@ -45,12 +45,28 @@ class ScoredCandidate:
 
 
 class PropertyScreen:
-    """Featurize + predict every target for candidate structures."""
+    """Featurize + predict every target for candidate structures.
 
-    def __init__(self, predictor: Predictor, cutoff: float = 6.0, device: str | None = None):
+    Optionally **decoupled**: a specialized ``stability_model`` supplies the
+    stability columns (formation energy, energy_above_hull) for the gate, while
+    ``predictor`` supplies the mechanical/thermal properties. This is the
+    recommended setup — a property model fine-tuned hard on the labeled subset
+    scores properties best but erodes the stability gate, so we keep a separate
+    stability specialist (e.g. the Stage-1 checkpoint, AUC ~0.92) for gating.
+    """
+
+    def __init__(
+        self,
+        predictor: Predictor,
+        stability_model: Predictor | None = None,
+        cutoff: float = 6.0,
+        device: str | None = None,
+    ):
         self.model = predictor
+        self.stability_model = stability_model
         self.cutoff = cutoff
         self.device = device or next(predictor.parameters()).device
+        self._stab_cols = [PREDICT_KEYS.index(k) for k in STABILITY_KEYS]
 
     @torch.no_grad()
     def score(self, structures, batch_size: int = 64) -> list[ScoredCandidate]:
@@ -75,6 +91,10 @@ class PropertyScreen:
     def _run(self, buf, structs) -> list[ScoredCandidate]:
         batch = collate(buf).to(self.device)
         preds = self.model(batch).cpu()  # [B, n_targets] physical units
+        if self.stability_model is not None:  # decoupled gate: override stability cols
+            sp = self.stability_model(batch).cpu()
+            for c in self._stab_cols:
+                preds[:, c] = sp[:, c]
         results = []
         for i, s in enumerate(structs):
             props = {k: float(preds[i, j]) for j, k in enumerate(PREDICT_KEYS)}
