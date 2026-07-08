@@ -24,6 +24,17 @@ from torch.utils.data.distributed import DistributedSampler
 from phlogiston.data.dataset import ShardedCrystalDataset, collate
 from phlogiston.models.predictor import PREDICT_KEYS, STABILITY_KEYS, Predictor
 
+_LABELS = {
+    "formation_energy_per_atom": "formE",
+    "energy_above_hull": "Ehull",
+    "bulk_modulus_vrh": "K",
+    "shear_modulus_vrh": "G",
+    "vickers_hardness": "Hv",
+    "fracture_toughness": "Kic",
+    "debye_temperature": "Debye",
+    "slack_thermal_conductivity": "kappa",
+}
+
 
 def _dist_info():
     """(world_size, rank, local_rank) from the torchrun env (defaults: single)."""
@@ -287,7 +298,12 @@ def train(
             n_batches += 1
         sched.step()
         val_mae, val_loss = evaluate(model, val_loader, device, stage, distributed)
-        stab = ", ".join(f"{k.split('_')[0]}={val_mae[k]:.3f}" for k in STABILITY_KEYS)
+        # report the stage-relevant targets (stability for stage 1; the
+        # mechanical/thermal properties for stage 2)
+        report_keys = (
+            STABILITY_KEYS if stage == 1 else [k for k in PREDICT_KEYS if k not in STABILITY_KEYS]
+        )
+        stab = ", ".join(f"{_LABELS[k]}={val_mae[k]:.3f}" for k in report_keys)
         improved = val_loss < best_val
         if improved:
             best_val = val_loss
