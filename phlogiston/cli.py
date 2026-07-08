@@ -124,6 +124,7 @@ def _cmd_train(args: argparse.Namespace) -> int:
         warmup_epochs=args.warmup_epochs,
         patience=args.patience,
         num_workers=args.num_workers,
+        compile=args.compile,
     )
     return 0
 
@@ -348,6 +349,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=4,
         help="DataLoader workers (parallel collation; keeps GPUs fed)",
+    )
+    tr.add_argument(
+        "--compile",
+        action="store_true",
+        help="torch.compile the model (fuses e3nn kernels; experimental on ROCm)",
     )
     tr.set_defaults(func=_cmd_train)
 

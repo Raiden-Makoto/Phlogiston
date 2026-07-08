@@ -135,6 +135,19 @@ the marginally-different sweep-optimal config (`3e-3/mul192`) was judged
 diminishing returns. The sweep's main value: confirming the config is robust and
 that **ν=3 isn't worth the cost**.
 
+## 7b. Performance investigation (negative result)
+
+GPU utilization sat at **~39%** during training. We tried three levers and
+**none moved it**: larger batch (128→512), more DataLoader workers (up to 16 on a
+384-core box), and `torch.compile(dynamic=True)` (epoch time unchanged after the
+one-off compile cost). Conclusion: the bottleneck is the **equivariant model's
+execution profile** — many small `e3nn` tensor-product kernels with host/launch
+gaps (and `rocm-smi` likely under-reporting bursty small-kernel occupancy), not
+data loading, batch size, or kernel fusion. We **accept ~250s/epoch**; it still
+trains to ~0.019 eV/atom. `--compile` is kept as an opt-in (off by default) but
+did not help this workload. `num_workers`/`batch_size` defaults are kept as
+reasonable (they don't hurt).
+
 ## 8. Status & open items
 
 - **Real Stage-1 run in progress** on the full corpus (baseline config), 2-GPU

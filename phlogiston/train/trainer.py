@@ -168,6 +168,7 @@ def train(
     warmup_epochs: int = 2,
     patience: int = 20,
     num_workers: int = 4,
+    compile: bool = False,
     seed: int = 42,
 ):
     if num_workers > 0:
@@ -228,6 +229,11 @@ def train(
     base = model
     if distributed:
         model = DDP(model, device_ids=[local])
+    if compile:
+        # fuse the many small e3nn kernels (the util bottleneck); dynamic=True
+        # for variable node/edge counts across batches.
+        log("[train] torch.compile(dynamic=True) ...")
+        model = torch.compile(model, dynamic=True)
 
     if stage == 1:
         opt = torch.optim.AdamW(base.stage1_parameters(), lr=lr, weight_decay=weight_decay)
