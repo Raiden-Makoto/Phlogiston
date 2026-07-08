@@ -123,6 +123,7 @@ def _cmd_train(args: argparse.Namespace) -> int:
         resume=args.resume,
         warmup_epochs=args.warmup_epochs,
         patience=args.patience,
+        num_workers=args.num_workers,
     )
     return 0
 
@@ -336,6 +337,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=20,
         help="Early-stop after N epochs without val improvement (0 disables)",
+    )
+    tr.add_argument(
+        "--num-workers",
+        type=int,
+        default=4,
+        help="DataLoader workers (parallel collation; keeps GPUs fed)",
     )
     tr.set_defaults(func=_cmd_train)
 

@@ -167,8 +167,14 @@ def train(
     resume: str | None = None,
     warmup_epochs: int = 2,
     patience: int = 20,
+    num_workers: int = 4,
     seed: int = 42,
 ):
+    if num_workers > 0:
+        # DataLoader workers return batches (tensors) via IPC; the file_system
+        # sharing strategy avoids file-descriptor exhaustion with many tensors.
+        torch.multiprocessing.set_sharing_strategy("file_system")
+
     world, rank, local = _dist_info()
     distributed = world > 1
     if distributed:
@@ -236,25 +242,22 @@ def train(
         start_epoch = resume_state["epoch"] + 1
         best_val = resume_state.get("best_val", float("inf"))
 
+    dl_kw = dict(collate_fn=collate, num_workers=num_workers, persistent_workers=num_workers > 0)
     if distributed:
         train_sampler = DistributedSampler(Subset(dataset, tr), shuffle=True, seed=seed)
         train_loader = DataLoader(
-            Subset(dataset, tr), batch_size=batch_size, sampler=train_sampler, collate_fn=collate
+            Subset(dataset, tr), batch_size=batch_size, sampler=train_sampler, **dl_kw
         )
         val_loader = DataLoader(
             Subset(dataset, va),
             batch_size=batch_size,
             sampler=DistributedSampler(Subset(dataset, va), shuffle=False),
-            collate_fn=collate,
+            **dl_kw,
         )
     else:
         train_sampler = None
-        train_loader = DataLoader(
-            Subset(dataset, tr), batch_size=batch_size, shuffle=True, collate_fn=collate
-        )
-        val_loader = DataLoader(
-            Subset(dataset, va), batch_size=batch_size, shuffle=False, collate_fn=collate
-        )
+        train_loader = DataLoader(Subset(dataset, tr), batch_size=batch_size, shuffle=True, **dl_kw)
+        val_loader = DataLoader(Subset(dataset, va), batch_size=batch_size, shuffle=False, **dl_kw)
 
     last_path = Path(out_dir) / f"predictor_stage{stage}_last.pt"
     best_path = Path(out_dir) / f"predictor_stage{stage}_best.pt"
