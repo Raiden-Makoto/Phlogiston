@@ -158,27 +158,59 @@ def optimize_latent(
     n: int,
     *,
     profile: dict[str, float] | None = None,
-    steps: int = 200,
-    lr: float = 0.1,
-    alpha: float = 0.1,
+    steps: int = 100,
+    lr: float = 0.05,
+    trust_radius: float = 6.0,
+    reward_cap: float = 2.0,
+    alpha: float = 0.0,
+    project_norm: bool = False,
     device: str | None = None,
     z0: torch.Tensor | None = None,
     seed: int | None = None,
 ) -> torch.Tensor:
-    """Gradient-ascend ``n`` latents toward the target profile. Returns z [n, d]."""
+    """Gradient-ascend ``n`` latents toward the target profile. Returns z [n, d].
+
+    Naive ascent on a learned head is an adversarial trap: it finds latents that
+    *fool* ``f_p`` (predicting physically-impossible >100 sigma materials) rather
+    than genuinely better regions, and those latents decode to junk. Two guards
+    keep the search honest and on-manifold:
+
+    * ``trust_radius`` -- after each step, clip the displacement ``z - z0`` to a
+      ball of this radius around the (in-distribution) anchor ``z0``. The head is
+      only trustworthy near real latents; this keeps z there. With d=256 the
+      anchor norm is ~16, so a radius of ~4 is a modest, safe local move.
+    * ``reward_cap`` -- saturate each per-target reward with ``cap*tanh(pred/cap)``
+      (standardized units). This tells the optimizer to aim for a *realistically
+      strong* material (~cap sigma above the mean) and removes any incentive to
+      chase head extrapolation beyond the data range.
+
+    ``project_norm`` optionally also rescales z to the typical-set radius
+    ``sqrt(d)``. ``alpha`` is an optional extra Gaussian-prior penalty."""
+    import math
+
     device = device or next(head.parameters()).device
     w = profile_weights(profile).to(device)
+    target_norm = math.sqrt(head.latent_dim)
     if z0 is None:
         g = torch.Generator(device=device).manual_seed(seed) if seed is not None else None
         z0 = torch.randn(n, head.latent_dim, generator=g, device=device)
-    z = z0.clone().detach().to(device).requires_grad_(True)
+    anchor = z0.clone().detach().to(device)
+    z = anchor.clone().requires_grad_(True)
     opt = torch.optim.Adam([z], lr=lr)
     for _ in range(steps):
         opt.zero_grad()
         pred = head(z)  # standardized [n, T]
-        objective = (pred * w).sum(dim=-1) - alpha * (z * z).sum(dim=-1)
+        reward = reward_cap * torch.tanh(pred / reward_cap) if reward_cap > 0 else pred
+        objective = (reward * w).sum(dim=-1) - alpha * (z * z).sum(dim=-1)
         (-objective.sum()).backward()  # ascent = minimize negative
         opt.step()
+        with torch.no_grad():
+            if trust_radius > 0:  # clip displacement to a ball around the anchor
+                delta = z - anchor
+                nrm = delta.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+                z.copy_(anchor + delta * (trust_radius / nrm).clamp(max=1.0))
+            if project_norm:
+                z.mul_(target_norm / z.norm(dim=-1, keepdim=True).clamp(min=1e-6))
     return z.detach()
 
 
@@ -189,16 +221,20 @@ def generate_conditioned(
     n: int,
     *,
     profile: dict[str, float] | None = None,
-    steps: int = 200,
-    lr: float = 0.1,
-    alpha: float = 0.1,
+    steps: int = 100,
+    lr: float = 0.05,
+    trust_radius: float = 6.0,
+    reward_cap: float = 2.0,
     steps_per_level: int = 4,
     device: str | None = None,
 ) -> list:
     """Optimize latents toward the profile, then decode each into a Structure."""
     device = device or next(cdvae.parameters()).device
     with torch.enable_grad():
-        Z = optimize_latent(head, n, profile=profile, steps=steps, lr=lr, alpha=alpha, device=device)
+        Z = optimize_latent(
+            head, n, profile=profile, steps=steps, lr=lr,
+            trust_radius=trust_radius, reward_cap=reward_cap, device=device,
+        )
     from phlogiston.models.cdvae.sampler import batched_sample
 
     return batched_sample(cdvae, Z, steps_per_level=steps_per_level)

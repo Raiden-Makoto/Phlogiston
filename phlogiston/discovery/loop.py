@@ -71,7 +71,8 @@ def discover(
     stability_ckpt: str | None = None,
     latent_head_ckpt: str | None = None,
     profile: dict[str, float] | None = None,
-    cond_steps: int = 200,
+    cond_steps: int = 100,
+    cond_trust_radius: float = 6.0,
     n_samples: int = 128,
     steps_per_level: int = 4,
     e_hull_max: float = 0.1,
@@ -112,8 +113,8 @@ def discover(
         head = load_latent_head(latent_head_ckpt, generator.latent_dim, device)
         log(f"[discover] property-conditioned generation of {n_samples} candidates ...")
         structures = generate_conditioned(
-            generator, head, n_samples, profile=profile,
-            steps=cond_steps, steps_per_level=steps_per_level, device=device,
+            generator, head, n_samples, profile=profile, steps=cond_steps,
+            trust_radius=cond_trust_radius, steps_per_level=steps_per_level, device=device,
         )
     else:
         log(f"[discover] sampling {n_samples} candidates (unconditional) ...")

@@ -192,6 +192,7 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         stability_ckpt=args.stability_ckpt,
         latent_head_ckpt=args.latent_head,
         cond_steps=args.cond_steps,
+        cond_trust_radius=args.cond_trust_radius,
         n_samples=args.n_samples,
         steps_per_level=args.steps_per_level,
         e_hull_max=args.e_hull_max,
@@ -526,7 +527,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Fitted latent property head (.pt) -> property-conditioned generation",
     )
-    dc.add_argument("--cond-steps", type=int, default=200, help="Latent-optimization steps")
+    dc.add_argument("--cond-steps", type=int, default=100, help="Latent-optimization steps")
+    dc.add_argument(
+        "--cond-trust-radius",
+        type=float,
+        default=6.0,
+        help="Trust-region radius for latent optimization (keeps z on-manifold)",
+    )
     dc.set_defaults(func=_cmd_discover)
 
     fh = sub.add_parser("fit-latent-head", help="Fit f_p(z) on a CDVAE for conditioning")
