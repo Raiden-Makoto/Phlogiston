@@ -31,6 +31,21 @@ def load_predictor(ckpt_path: str, device: str | None = None) -> Predictor:
     return model
 
 
+def load_synth_model(ckpt_path: str, device: str | None = None):
+    """Rebuild the Tier-1 SynthesizabilityModel from a checkpoint."""
+    from phlogiston.models.synth import SynthesizabilityModel
+
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    ckpt = torch.load(ckpt_path, map_location=device)
+    hp = ckpt.get("hparams", {})
+    model = SynthesizabilityModel(
+        mul=hp.get("mul", 128), n_layers=hp.get("n_layers", 2), correlation=hp.get("correlation", 3)
+    ).to(device)
+    model.load_state_dict(ckpt["model"])
+    model.eval()
+    return model
+
+
 @dataclass
 class ScoredCandidate:
     structure: object  # pymatgen Structure
@@ -59,11 +74,13 @@ class PropertyScreen:
         self,
         predictor: Predictor,
         stability_model: Predictor | None = None,
+        synth_model=None,
         cutoff: float = 6.0,
         device: str | None = None,
     ):
         self.model = predictor
         self.stability_model = stability_model
+        self.synth_model = synth_model  # optional Tier-1 synthesizability classifier
         self.cutoff = cutoff
         self.device = device or next(predictor.parameters()).device
         self._stab_cols = [PREDICT_KEYS.index(k) for k in STABILITY_KEYS]
@@ -95,10 +112,13 @@ class PropertyScreen:
             sp = self.stability_model(batch).cpu()
             for c in self._stab_cols:
                 preds[:, c] = sp[:, c]
+        synth = self.synth_model.predict_proba(batch).cpu() if self.synth_model is not None else None
         results = []
         for i, s in enumerate(structs):
             props = {k: float(preds[i, j]) for j, k in enumerate(PREDICT_KEYS)}
             props["density"] = float(s.density)  # analytic (g/cm^3)
+            if synth is not None:
+                props["synthesizability"] = float(synth[i])
             results.append(
                 ScoredCandidate(structure=s, properties=props, formula=s.composition.reduced_formula)
             )

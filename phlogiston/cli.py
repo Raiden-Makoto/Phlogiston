@@ -84,6 +84,14 @@ def _cmd_fetch_mp_elasticity(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_fetch_mp_synth(args: argparse.Namespace) -> int:
+    df = mp.fetch_synthesizability(args.data_root, chunk=args.chunk)
+    if len(df):
+        n_obs = int((~df["theoretical"] | df["has_icsd"]).sum())
+        print(f"[mp] {n_obs:,}/{len(df):,} experimentally observed (positives)")
+    return 0
+
+
 def _count_data_lines(path) -> int:
     with open(path, "rb") as f:
         return max(sum(1 for _ in f) - 1, 0)  # minus header
@@ -128,6 +136,31 @@ def _cmd_train(args: argparse.Namespace) -> int:
         select_by=args.select_by,
         grad_clip=args.grad_clip,
         restrict_labeled=args.restrict_labeled,
+    )
+    return 0
+
+
+def _cmd_train_synth(args: argparse.Namespace) -> int:
+    from phlogiston.train import train_synth
+
+    train_synth(
+        args.data_root,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        encoder_lr=args.encoder_lr,
+        mul=args.mul,
+        n_layers=args.n_layers,
+        correlation=args.correlation,
+        max_shards=args.max_shards,
+        include_gnome=not args.no_gnome,
+        out_dir=args.out_dir,
+        init_ckpt=args.init_ckpt,
+        resume=args.resume,
+        warmup_epochs=args.warmup_epochs,
+        patience=args.patience,
+        num_workers=args.num_workers,
+        grad_clip=args.grad_clip,
     )
     return 0
 
@@ -190,6 +223,8 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         args.predictor,
         args.data_root,
         stability_ckpt=args.stability_ckpt,
+        synth_ckpt=args.synth_ckpt,
+        synth_min=args.synth_min,
         latent_head_ckpt=args.latent_head,
         cond_steps=args.cond_steps,
         cond_trust_radius=args.cond_trust_radius,
@@ -199,6 +234,10 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         rho_max=args.rho_max,
         do_dedup=not args.no_dedup,
         check_novelty=not args.no_novelty,
+        check_feasibility=not args.no_feasibility,
+        max_elements=args.max_elements,
+        max_reduced_atoms=args.max_reduced_atoms,
+        allow_radioactive=args.allow_radioactive,
     )
     print("\n" + format_report(ranked, top_k=args.top_k))
     return 0
@@ -375,6 +414,13 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--force", action="store_true", help="Overwrite existing CIFs")
     e.set_defaults(func=_cmd_fetch_mp_elasticity)
 
+    es = sub.add_parser(
+        "fetch-mp-synth",
+        help="Fetch MP experimental-provenance flags (theoretical/ICSD) for Tier-1 synthesizability",
+    )
+    es.add_argument("--chunk", type=int, default=1000, help="Material IDs per API call")
+    es.set_defaults(func=_cmd_fetch_mp_synth)
+
     fz = sub.add_parser(
         "featurize", help="Precompute crystal graphs for the whole corpus (CPU, sharded)"
     )
@@ -465,6 +511,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tr.set_defaults(func=_cmd_train)
 
+    ts = sub.add_parser("train-synth", help="Train the Tier-1 synthesizability classifier")
+    ts.add_argument("--epochs", type=int, default=8)
+    ts.add_argument("--batch-size", type=int, default=512)
+    ts.add_argument("--lr", type=float, default=1e-3)
+    ts.add_argument(
+        "--encoder-lr", type=float, default=None,
+        help="Lower encoder LR (fine-tune) when warm-starting; default: single LR",
+    )
+    ts.add_argument("--mul", type=int, default=128)
+    ts.add_argument("--n-layers", type=int, default=2)
+    ts.add_argument("--correlation", type=int, default=3)
+    ts.add_argument("--max-shards", type=int, default=None)
+    ts.add_argument("--no-gnome", action="store_true", help="Exclude the GNoME negative pool")
+    ts.add_argument("--out-dir", default="runs")
+    ts.add_argument(
+        "--init-ckpt", default=None,
+        help="Warm-start the encoder from a Predictor/stability checkpoint",
+    )
+    ts.add_argument("--resume", default=None, help="Resume (restores optimizer/scheduler/epoch)")
+    ts.add_argument("--warmup-epochs", type=int, default=1)
+    ts.add_argument("--patience", type=int, default=6)
+    ts.add_argument("--num-workers", type=int, default=4)
+    ts.add_argument("--grad-clip", type=float, default=5.0)
+    ts.set_defaults(func=_cmd_train_synth)
+
     ev = sub.add_parser("evaluate", help="Score a checkpoint (MAE + R2 + stability AUC/AP)")
     ev.add_argument("--ckpt", required=True, help="Path to a saved checkpoint (.pt)")
     ev.add_argument("--split", default="val", choices=["train", "val", "test"])
@@ -522,6 +593,19 @@ def build_parser() -> argparse.ArgumentParser:
     dc.add_argument("--top-k", type=int, default=10)
     dc.add_argument("--no-dedup", action="store_true")
     dc.add_argument("--no-novelty", action="store_true")
+    dc.add_argument(
+        "--synth-ckpt", default=None,
+        help="Tier-1 synthesizability model (.pt); scores + optionally gates candidates",
+    )
+    dc.add_argument(
+        "--synth-min", type=float, default=0.3,
+        help="Tier-1 gate: drop candidates below this synthesizability (loose by "
+        "design to allow near-future synthesis advances; 0 = score only)",
+    )
+    dc.add_argument("--no-feasibility", action="store_true", help="Skip Tier-0 composition feasibility gate")
+    dc.add_argument("--max-elements", type=int, default=5, help="Tier-0: max distinct elements")
+    dc.add_argument("--max-reduced-atoms", type=int, default=40, help="Tier-0: max atoms in reduced formula")
+    dc.add_argument("--allow-radioactive", action="store_true", help="Tier-0: permit radioactive elements")
     dc.add_argument(
         "--latent-head",
         default=None,

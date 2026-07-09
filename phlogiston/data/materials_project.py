@@ -103,6 +103,11 @@ def metadata_path(data_root: str | Path) -> Path:
     return raw_dir(data_root) / "mp_metadata.csv"
 
 
+def synth_path(data_root: str | Path) -> Path:
+    """Synthesizability provenance table (material_id, theoretical, has_icsd)."""
+    return raw_dir(data_root) / "mp_synth.csv"
+
+
 def _with_retries(fn: Callable, *, tries: int = 4, backoff: float = 3.0, what: str = "request"):
     """Call ``fn`` retrying on transient MP API / network errors."""
     from mp_api.client.core.exceptions import MPRestError
@@ -278,6 +283,63 @@ def load_metadata(data_root: str | Path = "data") -> pd.DataFrame:
     if not meta.exists():
         raise FileNotFoundError(f"{meta} not found; run fetch_structures() first.")
     return pd.read_csv(meta)
+
+
+def fetch_synthesizability(
+    data_root: str | Path = "data",
+    *,
+    api_key: str | None = None,
+    material_ids: Sequence[str] | None = None,
+    chunk: int = 1000,
+) -> pd.DataFrame:
+    """Fetch the experimental-provenance flags used for the Tier-1
+    synthesizability label, for the material_ids already in ``mp_metadata.csv``
+    (or an explicit list). Writes ``mp_synth.csv`` and returns it.
+
+    Columns: ``material_id``, ``theoretical`` (True = DFT-only/never observed),
+    ``has_icsd`` (present in the ICSD, i.e. experimentally reported). A material
+    is a synthesizability *positive* iff it has been experimentally observed
+    (``theoretical == False`` or ``has_icsd``); everything else (theoretical MP +
+    all of GNoME) is treated as unlabeled/negative for PU training.
+    """
+    from mp_api.client import MPRester
+
+    key = get_api_key(api_key)
+    if material_ids is None:
+        material_ids = load_metadata(data_root)["material_id"].astype(str).tolist()
+    ids = [str(m) for m in material_ids]
+
+    rows: list[dict] = []
+    with MPRester(key) as mpr:
+        with tqdm(total=len(ids), desc="[mp] synth flags") as bar:
+            for batch in _batches(ids, chunk):
+                docs = _with_retries(
+                    lambda b=batch: mpr.materials.summary.search(
+                        material_ids=b, fields=["material_id", "theoretical", "database_IDs"]
+                    ),
+                    what=f"synth batch ({len(batch)})",
+                )
+                for d in docs:
+                    dbids = getattr(d, "database_IDs", None) or {}
+                    # database_IDs maps db name -> list of ids; ICSD presence => observed
+                    has_icsd = False
+                    if isinstance(dbids, dict):
+                        has_icsd = bool(dbids.get("icsd"))
+                    rows.append(
+                        {
+                            "material_id": str(d.material_id),
+                            "theoretical": bool(getattr(d, "theoretical", True)),
+                            "has_icsd": has_icsd,
+                        }
+                    )
+                bar.update(len(batch))
+
+    df = pd.DataFrame(rows, columns=["material_id", "theoretical", "has_icsd"])
+    out = synth_path(data_root)
+    df.to_csv(out, index=False)
+    n_obs = int((~df["theoretical"] | df["has_icsd"]).sum())
+    print(f"[mp] synth flags: {len(df):,} rows, {n_obs:,} experimentally observed -> {out}")
+    return df
 
 
 def load_structure(data_root: str | Path, material_id: str):

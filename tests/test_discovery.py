@@ -168,6 +168,51 @@ def test_latent_conditioning():
     _check("generate_conditioned returns structures", len(structs) >= 1, f"n={len(structs)}")
 
 
+def test_feasibility():
+    from phlogiston.discovery.feasibility import composition_feasibility, feasibility_filter
+
+    # a clean, common, charge-balanceable ternary passes with a high score
+    good = composition_feasibility("BaTiO3")
+    _check("feasibility: BaTiO3 passes", good.passed and good.score > 0.5, f"score={good.score}")
+
+    # radioactive element is a hard fail
+    rad = composition_feasibility("UO2")
+    _check("feasibility: UO2 rejected (radioactive)", not rad.passed, "; ".join(rad.reasons))
+
+    # high-entropy soup (too many elements) is a hard fail
+    soup = composition_feasibility("NaSm2Sc2TiNbGaFeCoReTcB", max_elements=5)
+    _check("feasibility: element soup rejected", not soup.passed, "; ".join(soup.reasons))
+
+    # a plausible intermetallic (all metals) is exempt from charge balance
+    inter = composition_feasibility("Co3Ru")
+    _check("feasibility: intermetallic Co3Ru passes", inter.passed, f"score={inter.score}")
+
+    # filter splits a mixed pool and annotates the soft score
+    pool = [_candidate({}, formula="BaTiO3"), _candidate({}, formula="UO2")]
+    pool[0].structure = _toy_structure(("Ba", "Ti"))
+    pool[1].structure = _toy_structure(("U", "O"))
+    feasible, rejected = feasibility_filter(pool)
+    ok = len(feasible) == 1 and len(rejected) == 1 and "feasibility" in feasible[0].properties
+    _check("feasibility_filter splits pool + annotates score", ok, f"{len(feasible)} ok / {len(rejected)} rej")
+
+
+def test_synth_model_and_screen():
+    from phlogiston.models.synth import SynthesizabilityModel
+
+    m = SynthesizabilityModel(mul=8, n_layers=1, correlation=1)
+    screen = PropertyScreen(
+        Predictor(mul=8, n_layers=1, correlation=1), synth_model=m, device="cpu"
+    )
+    structs = [_toy_structure(("Fe", "Al")), _toy_structure(("Ni", "Ti"))]
+    scored = screen.score(structs)
+    ok = len(scored) == 2 and all(
+        "synthesizability" in c.properties and 0.0 <= c.properties["synthesizability"] <= 1.0
+        for c in scored
+    )
+    _check("synth model scores in [0,1] via screen", ok,
+           f"vals={[round(c.properties.get('synthesizability', -1), 3) for c in scored]}")
+
+
 if __name__ == "__main__":
     test_ema()
     test_sample_returns_structure()
@@ -178,6 +223,8 @@ if __name__ == "__main__":
     test_multi_objective_score_range()
     test_novelty_and_dedup()
     test_latent_conditioning()
+    test_feasibility()
+    test_synth_model_and_screen()
     n_fail = sum(1 for _, ok, _ in _results if not ok)
     print(f"\n{len(_results) - n_fail}/{len(_results)} passed")
     sys.exit(1 if n_fail else 0)

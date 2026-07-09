@@ -2,6 +2,11 @@
 property screen -> multi-objective rank. Connects the CDVAE generator and the
 trained Predictor by *usage* (not weights)."""
 
+from phlogiston.discovery.feasibility import (
+    FeasibilityReport,
+    composition_feasibility,
+    feasibility_filter,
+)
 from phlogiston.discovery.loop import (
     discover,
     format_report,
@@ -21,4 +26,7 @@ __all__ = [
     "multi_objective_score",
     "pareto_front",
     "rank_candidates",
+    "FeasibilityReport",
+    "composition_feasibility",
+    "feasibility_filter",
 ]

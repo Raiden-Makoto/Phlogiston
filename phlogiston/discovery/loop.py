@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import torch
 
+from phlogiston.discovery.feasibility import feasibility_filter
 from phlogiston.discovery.novelty import dedup, load_reference_formulas, novelty_filter
 from phlogiston.discovery.rank import rank_candidates
-from phlogiston.discovery.screen import PropertyScreen, load_predictor
+from phlogiston.discovery.screen import PropertyScreen, load_predictor, load_synth_model
 from phlogiston.models.cdvae import CDVAE
 
 
@@ -69,6 +70,8 @@ def discover(
     data_root: str = "data",
     *,
     stability_ckpt: str | None = None,
+    synth_ckpt: str | None = None,
+    synth_min: float = 0.3,
     latent_head_ckpt: str | None = None,
     profile: dict[str, float] | None = None,
     cond_steps: int = 100,
@@ -80,6 +83,10 @@ def discover(
     weights: dict[str, float] | None = None,
     do_dedup: bool = True,
     check_novelty: bool = True,
+    check_feasibility: bool = True,
+    max_elements: int = 5,
+    max_reduced_atoms: int = 40,
+    allow_radioactive: bool = False,
     device: str | None = None,
     verbose: bool = True,
 ):
@@ -105,7 +112,12 @@ def discover(
     stability_model = load_predictor(stability_ckpt, device) if stability_ckpt else None
     if stability_model is not None:
         log("[discover] decoupled gate: stability from a separate specialist model")
-    screen = PropertyScreen(predictor, stability_model=stability_model, device=device)
+    synth_model = load_synth_model(synth_ckpt, device) if synth_ckpt else None
+    if synth_model is not None:
+        log("[discover] Tier-1 synthesizability model loaded (learned synthesis prior)")
+    screen = PropertyScreen(
+        predictor, stability_model=stability_model, synth_model=synth_model, device=device
+    )
 
     if latent_head_ckpt is not None:
         from phlogiston.models.cdvae import generate_conditioned
@@ -136,6 +148,27 @@ def discover(
         else:
             log("[discover] no reference formulas found; skipping novelty filter")
 
+    if check_feasibility:  # Tier-0 composition sanity (synthesizability first pass)
+        scored, infeasible = feasibility_filter(
+            scored,
+            max_elements=max_elements,
+            max_reduced_atoms=max_reduced_atoms,
+            allow_radioactive=allow_radioactive,
+        )
+        log(
+            f"[discover] {len(scored)} pass Tier-0 feasibility "
+            f"({len(infeasible)} rejected: too many elements / radioactive / implausible stoichiometry)"
+        )
+
+    if synth_model is not None and synth_min > 0:  # Tier-1 learned synthesizability gate
+        # Deliberately loose: the model reflects *today's* synthesis record, so a
+        # low bar admits borderline candidates that near-future methods could
+        # reach, while still culling the clearly-implausible. The synth score is
+        # kept on every card so the ranking still favors the more-synthesizable.
+        before = len(scored)
+        scored = [c for c in scored if c.properties.get("synthesizability", 0.0) >= synth_min]
+        log(f"[discover] {len(scored)} pass Tier-1 synthesizability >= {synth_min} ({before - len(scored)} rejected)")
+
     ranked = rank_candidates(scored, rho_max=rho_max, e_hull_max=e_hull_max, weights=weights)
     log(f"[discover] {len(ranked)} candidates pass stability gate (e_hull<={e_hull_max})")
     return ranked
@@ -149,8 +182,12 @@ def format_report(candidates, top_k: int = 10) -> str:
     for rank, c in enumerate(candidates[:top_k], start=1):
         p = c.properties
         star = " [Pareto]" if c.is_pareto else ""
+        feas = p.get("feasibility")
+        feas_str = f"  feas={feas:.2f}" if feas is not None else ""
+        synth = p.get("synthesizability")
+        synth_str = f"  synth={synth:.2f}" if synth is not None else ""
         lines.append(
-            f"{rank:>2}. {c.formula:<14} score={c.score:.3f}{star}\n"
+            f"{rank:>2}. {c.formula:<14} score={c.score:.3f}{star}{feas_str}{synth_str}\n"
             f"      Ehull={p.get('energy_above_hull', float('nan')):+.3f} eV/atom  "
             f"rho={p.get('density', float('nan')):.2f} g/cm^3\n"
             f"      K={p.get('bulk_modulus_vrh', float('nan')):.0f}  "

@@ -2,6 +2,7 @@
 
 from phlogiston.train.cdvae_trainer import train_cdvae
 from phlogiston.train.ema import EMA
+from phlogiston.train.synth_trainer import evaluate_synth, train_synth
 from phlogiston.train.trainer import (
     compute_normalization,
     evaluate,
@@ -13,6 +14,8 @@ from phlogiston.train.trainer import (
 __all__ = [
     "train",
     "train_cdvae",
+    "train_synth",
+    "evaluate_synth",
     "EMA",
     "evaluate",
     "evaluate_checkpoint",
