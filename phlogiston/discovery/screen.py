@@ -77,8 +77,8 @@ class PropertyScreen:
         for s in structures:
             try:
                 g = structure_to_graph(s, cutoff=self.cutoff)
-            except (ValueError, RuntimeError):
-                continue  # invalid geometry -> drop
+            except Exception:  # noqa: BLE001  invalid geometry / degenerate cell -> drop
+                continue
             buf.append((g, torch.zeros(1), torch.zeros(1, dtype=torch.bool)))
             keep.append(s)
             if len(buf) >= batch_size:

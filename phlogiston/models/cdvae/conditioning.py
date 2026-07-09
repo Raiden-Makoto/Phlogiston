@@ -203,6 +203,6 @@ def generate_conditioned(
     for i in range(n):
         try:
             structures.append(cdvae.sample(z=Z[i : i + 1], steps_per_level=steps_per_level))
-        except (ValueError, RuntimeError):
+        except Exception:  # noqa: BLE001  skip degenerate samples
             continue
     return structures

@@ -136,13 +136,25 @@ class CDVAE(nn.Module):
 
     # ---- lattice reconstruction ----------------------------------------
     def _lattice_from_params(self, params6: torch.Tensor):
-        """[6] normalized (a,b,c,alpha,beta,gamma) -> pymatgen Lattice."""
+        """[6] normalized (a,b,c,alpha,beta,gamma) -> pymatgen Lattice.
+
+        Clamps lengths/angles to a physical range and rejects degenerate
+        (near-singular / zero-volume) cells -- otherwise pymatgen's neighbor
+        search divides by a zero cell-matrix determinant. Conditioned latents in
+        particular can push the lattice head off-manifold, so fall back to a
+        cubic cell of the mean length when the reconstruction is invalid.
+        """
+        import math
+
         from pymatgen.core import Lattice
 
         p = (params6.detach().cpu() * self._lat_scale.cpu()).tolist()
-        a, b, c = (max(v, 1.0) for v in p[:3])  # guard against tiny/degenerate cells
-        al, be, ga = (min(max(v, 20.0), 160.0) for v in p[3:])  # keep angles valid
-        return Lattice.from_parameters(a, b, c, al, be, ga)
+        a, b, c = (min(max(v, 2.0), 50.0) for v in p[:3])
+        al, be, ga = (min(max(v, 40.0), 140.0) for v in p[3:])  # keep the cell non-degenerate
+        lat = Lattice.from_parameters(a, b, c, al, be, ga)
+        if not math.isfinite(lat.volume) or lat.volume < 1e-3:
+            lat = Lattice.cubic(max((a + b + c) / 3.0, 2.0))
+        return lat
 
     # ---- full ab-initio sampling ---------------------------------------
     @torch.no_grad()
@@ -214,8 +226,8 @@ class CDVAE(nn.Module):
                             )
                         ]
                     )
-                except ValueError:
-                    break  # isolated atoms; stop refining at this config
+                except Exception:  # noqa: BLE001  isolated atoms / degenerate cell
+                    break  # stop refining this config; return the current structure
                 g = g.to(device)
                 score = self.decoder(g, z, torch.tensor([sigma], device=device)).coord_score
                 cart = torch.tensor(struct.cart_coords, dtype=torch.float32)

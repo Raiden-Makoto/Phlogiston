@@ -45,8 +45,8 @@ def sample_candidates(generator: CDVAE, n: int, steps_per_level: int = 4) -> lis
     for _ in range(n):
         try:
             structures.append(generator.sample(steps_per_level=steps_per_level))
-        except (ValueError, RuntimeError):
-            continue  # degenerate sample; skip
+        except Exception:  # noqa: BLE001  degenerate sample; skip
+            continue
     return structures
 
 
