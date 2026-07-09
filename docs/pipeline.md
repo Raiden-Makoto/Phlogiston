@@ -52,7 +52,12 @@ Fixed target vector (`TARGET_KEYS`), assembled per material with a **mask**
         └───────────────────────────┬──────────────────────────────────────┘
                                      ▼
         ┌──────────────────── DISCOVERY LOOP (Phase 6) ────────────────────┐
-        │  sample candidates → stability gate → property screen → rank      │
+        │  sample → screen → dedup/novelty → Tier-0/1 feasibility → rank     │
+        └───────────────────────────┬──────────────────────────────────────┘
+                                     ▼
+        ┌──────────────────── VERIFY / Tier 2 (Phase 7) ───────────────────┐
+        │  uMLIP relax → refined hull → phonon dynamical gate → write-back  │
+        │  (independent physics check; see phlogiston/verify/DESIGN.md)     │
         └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -249,6 +254,41 @@ for target profile P (light + strong + tough + heat-resistant):
 
 - Multi-objective ranking (Pareto front) over the competing goals; density is a
   hard-ish constraint (flight), stability a gate, mechanics+thermal the score.
+- Feasibility tiers screen synthesizability before physics: **Tier 0** rule-based
+  composition checks (`discovery/feasibility.py`), **Tier 1** a learned
+  synthesizability classifier (`models/synth/`). Survivors are persisted to a
+  durable, deduplicated registry (`candidates.csv` + CIFs).
+
+---
+
+## 7.5 Verification / Tier 2 (Phase 7) — independent physics gate
+
+Everything up to here is a *learned* judgement, and the discovery stability score
+is **inside the generation loop** — the latent optimizer ascends the predictor's
+own hull estimate, so candidates cluster where that predictor is optimistic
+(grading our own homework). Tier 2 brings in a model that never saw the loop: a
+pretrained **universal ML interatomic potential (uMLIP, e.g. MACE-MP-0)**.
+
+- **Relax** each candidate to its true local minimum (the predictor scores the
+  as-generated, unrelaxed cell — a structure that doesn't physically exist); the
+  relaxed structure replaces the generated one, drift is recorded.
+- **Refined hull**: uMLIPs are `MPtrj`-trained, so their energies are MP-frame
+  comparable → an `energy_above_hull` that needs no DFT. The residual vs the
+  predictor is a **bias meter** feeding back into the conditioning trust radius.
+- **Dynamical stability**: finite-displacement phonons (near-hull survivors only)
+  reject imaginary-mode structures — something a scalar-energy predictor *cannot*
+  compute (it needs forces).
+
+**uMLIP is the primary verification tool here — not a stopgap for DFT.** For
+screening fictional candidates at scale it is strictly the better choice: it runs
+on our ROCm GPUs (DFT's GPU path is CUDA-only), is orders of magnitude cheaper,
+is hull-comparable by construction, and — being one consistent model — avoids the
+per-system convergence babysitting that makes a single DFT run error-prone. DFT
+is demoted to an **optional Tier 3**: a manual, on-demand confirmation for a top
+finalist in an exotic chemistry (where any uMLIP is least reliable), run on
+HPC/cloud. The verified registry is exactly the hand-off artifact it consumes.
+
+Full design: `phlogiston/verify/DESIGN.md`.
 
 ---
 
@@ -275,8 +315,10 @@ phlogiston/
     encoder/     #   shared E(3)-equivariant encoder        (DESIGN.md)
     predictor/   #   encoder + stability & property heads   (DESIGN.md, schedule B)
     cdvae/       #   ab-initio generator (VAE + predictors + score decoder) (DESIGN.md)
-  train/         # stage1 (pretrain) / stage2 (fine-tune) / parallel (TP2, max TP4)
-  discovery/     # stability gate + property screen + multi-objective ranking
+    synth/       #   Tier-1 synthesizability classifier          (models/synth)
+  train/         # stage1 (pretrain) / stage2 (fine-tune) / synth / cdvae
+  discovery/     # screen + dedup/novelty + Tier-0/1 feasibility + rank + registry
+  verify/        # Tier-2 uMLIP relax + hull + phonon gate         (DESIGN.md)
 ```
 
 Detailed, per-component architecture lives in `layers/README.md` and
@@ -289,9 +331,10 @@ Detailed, per-component architecture lives in `layers/README.md` and
 - [x] Data foundation + labels
 - [x] Featurizer + validation
 - [x] Full precompute (629k graphs)
-- [ ] **Phase 4**: predictor model + schedule-B training (this is next)
-- [ ] Phase 5: generator
-- [ ] Phase 6: discovery loop + reporting
+- [x] Phase 4: predictor model + schedule-B training
+- [x] Phase 5: CDVAE generator (+ latent-optimization conditioning)
+- [x] Phase 6: discovery loop + Tier-0/1 feasibility + registry + reporting
+- [ ] **Phase 7**: Tier-2 uMLIP verification (relax + hull + phonons) — this is next
 
 ---
 
@@ -305,3 +348,5 @@ Detailed, per-component architecture lives in `layers/README.md` and
 - Atom-type generation: CDVAE type-prediction+Langevin vs discrete diffusion (D3PM).
 - Conditioning: latent gradient optimization vs classifier-free guidance.
 - Discovery: exact multi-objective scoring / density ceiling for "flight".
+- Tier-2 verification: uMLIP backend, self-consistent hull, phonon rigor,
+  bias-feedback — see `phlogiston/verify/DESIGN.md` §11.
