@@ -110,6 +110,7 @@ def train_cdvae(
     device: str | None = None,
     out_dir: str = "runs",
     resume: str | None = None,
+    init_ckpt: str | None = None,
     warmup_epochs: int = 2,
     patience: int = 8,
     num_workers: int = 4,
@@ -145,6 +146,10 @@ def train_cdvae(
     log(f"[cdvae] {len(dataset):,} graphs -> train {len(tr):,} / val {len(va):,}")
 
     resume_state = torch.load(resume, map_location=device) if resume else None
+    # warm-start: load weights (+EMA) only, then train with a FRESH optimizer /
+    # schedule / epoch counter -- unlike --resume, which restores the annealed
+    # scheduler (LR ~0). Use this to continue a capped run to convergence.
+    init_state = torch.load(init_ckpt, map_location=device) if init_ckpt else None
     model = CDVAE(
         latent_dim=latent_dim, mul=mul, n_max=n_max, beta=beta,
         n_layers=n_layers, correlation=correlation,
@@ -152,6 +157,9 @@ def train_cdvae(
     if resume_state is not None:
         model.load_state_dict(resume_state["model"])
         log(f"[cdvae] resuming from {resume} (epoch {resume_state['epoch']})")
+    elif init_state is not None:
+        model.load_state_dict(init_state["model"])
+        log(f"[cdvae] warm-started (weights+EMA, fresh schedule) from {init_ckpt}")
 
     base = model
     if distributed:
@@ -160,6 +168,8 @@ def train_cdvae(
     ema = EMA(base, decay=ema_decay)
     if resume_state is not None and resume_state.get("ema"):
         ema.load_state_dict(resume_state["ema"])
+    elif init_state is not None and init_state.get("ema"):
+        ema.load_state_dict(init_state["ema"])
 
     opt = torch.optim.AdamW(base.parameters(), lr=lr, weight_decay=weight_decay)
     sched = _build_scheduler(opt, epochs, warmup_epochs)

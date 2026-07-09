@@ -152,6 +152,7 @@ def _cmd_train_cdvae(args: argparse.Namespace) -> int:
         max_shards=args.max_shards,
         out_dir=args.out_dir,
         resume=args.resume,
+        init_ckpt=args.init_ckpt,
         warmup_epochs=args.warmup_epochs,
         patience=args.patience,
         num_workers=args.num_workers,
@@ -492,7 +493,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tc.add_argument("--max-shards", type=int, default=None)
     tc.add_argument("--out-dir", default="runs")
-    tc.add_argument("--resume", default=None)
+    tc.add_argument("--resume", default=None, help="Full resume (weights+opt+sched+epoch)")
+    tc.add_argument(
+        "--init-ckpt",
+        default=None,
+        help="Warm-start weights+EMA only, fresh schedule (continue a capped run)",
+    )
     tc.add_argument("--warmup-epochs", type=int, default=2)
     tc.add_argument("--patience", type=int, default=8)
     tc.add_argument("--num-workers", type=int, default=4)
