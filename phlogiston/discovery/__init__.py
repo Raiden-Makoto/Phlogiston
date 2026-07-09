@@ -12,6 +12,7 @@ from phlogiston.discovery.loop import (
     format_report,
     load_generator,
     sample_candidates,
+    save_candidates,
 )
 from phlogiston.discovery.rank import multi_objective_score, pareto_front, rank_candidates
 from phlogiston.discovery.screen import PropertyScreen, load_predictor
@@ -23,6 +24,7 @@ __all__ = [
     "sample_candidates",
     "discover",
     "format_report",
+    "save_candidates",
     "multi_objective_score",
     "pareto_front",
     "rank_candidates",

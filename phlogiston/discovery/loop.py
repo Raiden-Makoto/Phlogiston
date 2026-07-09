@@ -84,6 +84,7 @@ def discover(
     do_dedup: bool = True,
     check_novelty: bool = True,
     check_feasibility: bool = True,
+    save_dir: str | None = None,
     max_elements: int = 5,
     max_reduced_atoms: int = 40,
     allow_radioactive: bool = False,
@@ -171,7 +172,93 @@ def discover(
 
     ranked = rank_candidates(scored, rho_max=rho_max, e_hull_max=e_hull_max, weights=weights)
     log(f"[discover] {len(ranked)} candidates pass stability gate (e_hull<={e_hull_max})")
+    if save_dir and ranked:
+        save_candidates(ranked, save_dir, verbose=verbose)
     return ranked
+
+
+# Persisted columns for the candidate registry (fixed order).
+_CANDIDATE_COLUMNS = [
+    "id", "formula", "run_id", "timestamp", "score", "is_pareto",
+    "feasibility", "synthesizability", "energy_above_hull", "density",
+    "bulk_modulus_vrh", "shear_modulus_vrh", "vickers_hardness",
+    "fracture_toughness", "debye_temperature", "slack_thermal_conductivity",
+    "formation_energy_per_atom",
+]
+
+
+def save_candidates(candidates, save_dir: str, *, run_id: str | None = None,
+                    dedup_existing: bool = True, verbose: bool = True) -> int:
+    """Persist ranked candidates to ``save_dir``: write one CIF per survivor and
+    append to an accumulating ``candidates.csv`` (all scores + properties).
+
+    Deduplicates against previously-saved structures (StructureMatcher) so
+    repeated runs build one growing, unique shortlist -- exactly the durable set
+    to feed Tier-2 DFT. Returns the number of newly-added candidates.
+    """
+    import csv
+    import time
+    from pathlib import Path
+
+    save = Path(save_dir)
+    cifs = save / "cifs"
+    cifs.mkdir(parents=True, exist_ok=True)
+    csv_path = save / "candidates.csv"
+    run_id = run_id or time.strftime("%Y%m%d-%H%M%S")
+
+    next_id = 0
+    if csv_path.exists():
+        import pandas as pd
+
+        prev = pd.read_csv(csv_path)
+        next_id = int(prev["id"].max()) + 1 if len(prev) else 0
+
+    existing = []
+    matcher = None
+    if dedup_existing:
+        from pymatgen.analysis.structure_matcher import StructureMatcher
+        from pymatgen.core import Structure
+
+        matcher = StructureMatcher()
+        for p in sorted(cifs.glob("*.cif")):
+            try:
+                existing.append(Structure.from_file(str(p)))
+            except Exception:  # noqa: BLE001
+                pass
+
+    added = 0
+    write_header = not csv_path.exists()
+    with open(csv_path, "a", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=_CANDIDATE_COLUMNS)
+        if write_header:
+            w.writeheader()
+        for c in candidates:
+            s = c.structure
+            if matcher is not None and any(matcher.fit(s, e) for e in existing):
+                continue  # already in the registry
+            cid = next_id
+            next_id += 1
+            fname = f"{cid:05d}_{c.formula}.cif".replace("/", "_")
+            try:
+                s.to(filename=str(cifs / fname), fmt="cif")
+            except Exception:  # noqa: BLE001  (skip CIFs pymatgen can't serialize)
+                pass
+            p = c.properties
+            row = {
+                "id": cid, "formula": c.formula, "run_id": run_id,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "score": round(float(c.score), 4), "is_pareto": bool(c.is_pareto),
+            }
+            for k in _CANDIDATE_COLUMNS[6:]:
+                v = p.get(k)
+                row[k] = round(float(v), 4) if v is not None else ""
+            w.writerow(row)
+            existing.append(s)
+            added += 1
+    if verbose:
+        print(f"[discover] saved {added} new candidates -> {csv_path} ({next_id} total in registry)",
+              flush=True)
+    return added
 
 
 def format_report(candidates, top_k: int = 10) -> str:

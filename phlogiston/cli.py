@@ -235,6 +235,7 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         do_dedup=not args.no_dedup,
         check_novelty=not args.no_novelty,
         check_feasibility=not args.no_feasibility,
+        save_dir=args.save_dir,
         max_elements=args.max_elements,
         max_reduced_atoms=args.max_reduced_atoms,
         allow_radioactive=args.allow_radioactive,
@@ -603,6 +604,10 @@ def build_parser() -> argparse.ArgumentParser:
         "design to allow near-future synthesis advances; 0 = score only)",
     )
     dc.add_argument("--no-feasibility", action="store_true", help="Skip Tier-0 composition feasibility gate")
+    dc.add_argument(
+        "--save-dir", default=None,
+        help="Persist survivors here: CIFs + an accumulating, deduped candidates.csv",
+    )
     dc.add_argument("--max-elements", type=int, default=5, help="Tier-0: max distinct elements")
     dc.add_argument("--max-reduced-atoms", type=int, default=40, help="Tier-0: max atoms in reduced formula")
     dc.add_argument("--allow-radioactive", action="store_true", help="Tier-0: permit radioactive elements")

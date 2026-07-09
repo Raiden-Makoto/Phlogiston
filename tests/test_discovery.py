@@ -213,6 +213,33 @@ def test_synth_model_and_screen():
            f"vals={[round(c.properties.get('synthesizability', -1), 3) for c in scored]}")
 
 
+def test_save_candidates():
+    import csv
+    import tempfile
+    from pathlib import Path
+
+    from phlogiston.discovery.loop import save_candidates
+
+    c = _candidate({"energy_above_hull": -0.02, "density": 3.0, "bulk_modulus_vrh": 200,
+                    "feasibility": 0.8, "synthesizability": 0.7}, formula="FeAl")
+    c.score = 0.5
+    with tempfile.TemporaryDirectory() as d:
+        n1 = save_candidates([c], d, verbose=False)
+        csv_path = Path(d) / "candidates.csv"
+        cifs = list((Path(d) / "cifs").glob("*.cif"))
+        with open(csv_path) as f:
+            rows = list(csv.DictReader(f))
+        wrote = n1 == 1 and len(rows) == 1 and len(cifs) == 1 and \
+            rows[0]["formula"] == "FeAl" and rows[0]["synthesizability"] == "0.7"
+        # second save of the same structure is deduped (0 added, still 1 total)
+        n2 = save_candidates([c], d, verbose=False)
+        with open(csv_path) as f:
+            rows2 = list(csv.DictReader(f))
+        deduped = n2 == 0 and len(rows2) == 1
+    _check("save_candidates writes CIF+CSV then dedups across runs", wrote and deduped,
+           f"n1={n1} n2={n2}")
+
+
 if __name__ == "__main__":
     test_ema()
     test_sample_returns_structure()
@@ -225,6 +252,7 @@ if __name__ == "__main__":
     test_latent_conditioning()
     test_feasibility()
     test_synth_model_and_screen()
+    test_save_candidates()
     n_fail = sum(1 for _, ok, _ in _results if not ok)
     print(f"\n{len(_results) - n_fail}/{len(_results)} passed")
     sys.exit(1 if n_fail else 0)
