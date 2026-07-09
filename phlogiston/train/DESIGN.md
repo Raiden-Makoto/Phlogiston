@@ -126,7 +126,7 @@ torchrun --nproc_per_node=2 -m phlogiston.cli train --stage 2 --epochs 40 \
   we fine-tune on only ~12k labels and overfitting is a real risk.
 - **Huber loss (smooth-L1)** over MSE/MAE: quadratic near zero (precise, smooth
   gradients) but linear for large errors (bounded gradient → robust to the
-  outlier/noisy DFT labels materials data contains). Computed in standardized
+  outlier/noisy labels materials data contains). Computed in standardized
   space so `delta=1.0` ≈ 1 std. MSE would let outliers dominate; L1 is
   non-smooth at 0 and converges less precisely.
 - **Target standardization (train-split only)**: puts energies (eV), moduli

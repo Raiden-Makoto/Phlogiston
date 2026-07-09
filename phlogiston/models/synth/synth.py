@@ -7,7 +7,7 @@ made (Materials Project entries with ICSD provenance / ``theoretical=False``);
 everything else -- theoretical MP entries and the entire GNoME hypothetical set
 -- is treated as unlabeled/negative. The resulting score is a *learned* synthesis
 prior that complements the Tier-0 composition rules and gates/ranks candidates
-before the expensive Tier-2 DFT check.
+before the Tier-2 physics verification (ensemble uMLIP).
 
 Because the encoder is architecturally identical to the Predictor's, the head
 can be warm-started from a trained stability/predictor checkpoint

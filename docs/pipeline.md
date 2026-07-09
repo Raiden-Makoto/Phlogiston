@@ -56,7 +56,7 @@ Fixed target vector (`TARGET_KEYS`), assembled per material with a **mask**
         └───────────────────────────┬──────────────────────────────────────┘
                                      ▼
         ┌──────────────────── VERIFY / Tier 2 (Phase 7) ───────────────────┐
-        │  uMLIP relax → refined hull → phonon dynamical gate → write-back  │
+        │  ensemble uMLIP: relax → hull → confidence → phonon gate → write  │
         │  (independent physics check; see phlogiston/verify/DESIGN.md)     │
         └───────────────────────────────────────────────────────────────────┘
 ```
@@ -124,11 +124,11 @@ Node features carry mixed irreps (`0e + 1o + 2e + …`); equivariance is exact.
 - **Property heads** (stage 2): `K`, `G`, hardness, toughness, Debye, κ.
 - **Density**: analytic (mass/volume) — not a head.
 
-> Note on relaxation: our labels are per-structure scalar energies (no DFT
-> forces), so the stability model is an **energy/e_above_hull regressor**, not a
-> force field. It gates candidates by *predicting* hull distance directly.
-> Force-based relaxation (optional, later) would require force labels or
-> initializing from a pretrained potential — out of scope for the from-scratch v1.
+> Note on relaxation: our labels are per-structure scalar energies (no forces),
+> so the stability model is an **energy/e_above_hull regressor**, not a force
+> field. It gates candidates by *predicting* hull distance directly — a fast,
+> in-loop screen. Force-based relaxation is done later and independently by the
+> Tier-2 ensemble uMLIP layer (§7.5), not by this predictor.
 
 ### 4.5 Targets & normalization
 - Each target standardized (z-score) using train-set statistics; predictions
@@ -266,27 +266,27 @@ for target profile P (light + strong + tough + heat-resistant):
 Everything up to here is a *learned* judgement, and the discovery stability score
 is **inside the generation loop** — the latent optimizer ascends the predictor's
 own hull estimate, so candidates cluster where that predictor is optimistic
-(grading our own homework). Tier 2 brings in a model that never saw the loop: a
-pretrained **universal ML interatomic potential (uMLIP, e.g. MACE-MP-0)**.
+(grading our own homework). Tier 2 brings in models that never saw the loop: an
+**ensemble of pretrained universal ML interatomic potentials (uMLIPs — MACE-MP-0,
+CHGNet, ORB)**.
 
 - **Relax** each candidate to its true local minimum (the predictor scores the
   as-generated, unrelaxed cell — a structure that doesn't physically exist); the
   relaxed structure replaces the generated one, drift is recorded.
 - **Refined hull**: uMLIPs are `MPtrj`-trained, so their energies are MP-frame
-  comparable → an `energy_above_hull` that needs no DFT. The residual vs the
+  comparable → a directly-usable `energy_above_hull`. The residual vs the
   predictor is a **bias meter** feeding back into the conditioning trust radius.
+- **Ensemble confidence**: several independent potentials re-score the relaxed
+  cell; their **disagreement** flags off-distribution (exotic) candidates as
+  low-confidence for manual review — the built-in "don't trust me here" detector.
 - **Dynamical stability**: finite-displacement phonons (near-hull survivors only)
   reject imaginary-mode structures — something a scalar-energy predictor *cannot*
   compute (it needs forces).
 
-**uMLIP is the primary verification tool here — not a stopgap for DFT.** For
-screening fictional candidates at scale it is strictly the better choice: it runs
-on our ROCm GPUs (DFT's GPU path is CUDA-only), is orders of magnitude cheaper,
-is hull-comparable by construction, and — being one consistent model — avoids the
-per-system convergence babysitting that makes a single DFT run error-prone. DFT
-is demoted to an **optional Tier 3**: a manual, on-demand confirmation for a top
-finalist in an exotic chemistry (where any uMLIP is least reliable), run on
-HPC/cloud. The verified registry is exactly the hand-off artifact it consumes.
+The ensemble is the whole verification method: it runs entirely on our ROCm GPUs,
+is hull-comparable by construction, is cheap enough to apply to the full registry,
+and turns foundation potentials' one real weakness — unreliability
+off-distribution — into an explicit per-candidate confidence estimate.
 
 Full design: `phlogiston/verify/DESIGN.md`.
 

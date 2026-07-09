@@ -7,7 +7,7 @@ Reuses the precomputed graph shards (each record keeps its provenance ``id`` /
     observed -- ``theoretical == False`` or present in the ICSD (from
     ``mp_synth.csv``, produced by ``phlogiston fetch-mp-synth``).
   * unlabeled/negative (0): theoretical-only MP entries and all of GNoME
-    (DFT-predicted, never synthesized).
+    (computationally predicted, never synthesized).
 
 MP entries whose provenance we don't have (missing from ``mp_synth.csv``) are
 marked *invalid* and excluded from training rather than silently labeled 0.

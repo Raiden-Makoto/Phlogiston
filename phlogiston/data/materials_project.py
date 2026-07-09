@@ -296,7 +296,7 @@ def fetch_synthesizability(
     synthesizability label, for the material_ids already in ``mp_metadata.csv``
     (or an explicit list). Writes ``mp_synth.csv`` and returns it.
 
-    Columns: ``material_id``, ``theoretical`` (True = DFT-only/never observed),
+    Columns: ``material_id``, ``theoretical`` (True = computed-only/never observed),
     ``has_icsd`` (present in the ICSD, i.e. experimentally reported). A material
     is a synthesizability *positive* iff it has been experimentally observed
     (``theoretical == False`` or ``has_icsd``); everything else (theoretical MP +

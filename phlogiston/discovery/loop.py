@@ -203,7 +203,7 @@ def save_candidates(candidates, save_dir: str, *, run_id: str | None = None,
 
     Deduplicates against previously-saved structures (StructureMatcher) so
     repeated runs build one growing, unique shortlist -- exactly the durable set
-    to feed Tier-2 DFT. Returns the number of newly-added candidates.
+    to feed Tier-2 verification. Returns the number of newly-added candidates.
     """
     import csv
     import time

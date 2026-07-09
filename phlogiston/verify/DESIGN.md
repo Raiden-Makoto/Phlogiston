@@ -6,7 +6,7 @@ universal ML interatomic potential (uMLIP) — touches the candidate, so it both
 **gates** on real physics and **measures the bias** of our in-loop predictor.
 Consumes the durable registry from `discovery` (`candidates.csv` + CIFs) and
 writes verified verdicts back. This document is the plan; it is intentionally
-code-free. See `docs/pipeline.md` §7 and `discovery/` (Tier 0/1).
+code-free. See `docs/pipeline.md` §7.5 and `discovery/` (Tier 0/1).
 
 ---
 
@@ -27,7 +27,7 @@ independent evidence.
 | Relaxes geometry? | no — scores the *as-generated* (noisy) cell | yes — finds the real local minimum |
 | Gives forces / phonons? | no | yes → dynamical stability |
 | In the generation loop? | yes (circular) | no (independent) |
-| Trained on | equilibrium structures, masked scalar labels | DFT relaxation trajectories (`MPtrj`) |
+| Trained on | equilibrium structures, masked scalar labels | Materials Project relaxation trajectories (`MPtrj`) |
 
 Three things this buys that the predictor structurally can't:
 1. **Relaxation** — the CDVAE emits approximate geometry; "the material" is the
@@ -40,48 +40,46 @@ Three things this buys that the predictor structurally can't:
 3. **Independence + calibration** — an out-of-loop verdict, *and* the residual
    `E_uMLIP − E_predictor` measures the predictor's optimism bias (see §5).
 
-## 1. Why uMLIP is the primary tool (not a DFT stopgap)
+## 1. Why an ensemble of uMLIPs
 
-For screening fictional candidates at scale, a foundation uMLIP is *strictly the
-better choice* here — not a cheap approximation we tolerate until DFT is
-available:
+Foundation universal ML interatomic potentials are the right verification tool
+for this pipeline, and we use **an ensemble of independent ones** rather than a
+single model. Why uMLIP at all, then why an ensemble:
 
 - **Hull compatibility for free.** `energy_above_hull` is only meaningful in a
-  consistent reference frame. Foundation potentials (MACE-MP-0, CHGNet) are
+  consistent reference frame. Foundation potentials (MACE-MP-0, CHGNet, ORB) are
   trained on **`MPtrj`** — Materials Project relaxation trajectories — so their
-  energies live in MP's frame and are directly hull-comparable *without* DFT.
-- **Runs on the hardware we have.** uMLIPs are PyTorch models → run on the gbt
-  AMD MI350X (ROCm). DFT (VASP/QE) is CPU-MPI or **CUDA/NVIDIA** GPU; ROCm DFT is
-  essentially unsupported, so DFT would need a separate CPU HPC/cloud cluster.
-- **Cost.** uMLIP relaxation is seconds, phonons minutes — vs DFT hours per
-  relaxation and 50–200 runs per phonon calc. This turns "verify thousands of
-  fictional structures" (infeasible) into a routine batch on the existing box.
-- **Consistency = robustness.** One fixed model applies identical physics to
-  every candidate, so its errors are *systematic and cancel* in hull/residual
-  comparisons. A DFT campaign is a fleet of independent runs, each needing
-  per-system convergence babysitting (k-points, smearing, magnetism, mixing) —
-  a single mis-converged run silently poisons a verdict. At screening scale the
-  uMLIP is often the *more* trustworthy signal, not just the faster one.
-- **Honest caveat.** uMLIPs are least reliable **off-distribution** — exactly
-  where our more exotic fictional compositions live. So the uMLIP verdict is
-  trustworthy for "relaxes to a sane, dynamically-stable, near-hull structure,"
-  but an exotic *winner* still deserves one DFT confirmation. That is **Tier 3**:
-  a manual, on-demand, top-1-or-2 DFT check on HPC/cloud — not a pipeline stage
-  (see §9).
+  energies live in MP's frame and are directly hull-comparable.
+- **Runs on the hardware we have.** uMLIPs are PyTorch models → they run on the
+  gbt AMD MI350X (ROCm) GPUs, the same box as the rest of the pipeline.
+- **Cost.** A relaxation is seconds and phonons minutes, so verifying the whole
+  registry (and re-scoring with several potentials) is a routine batch, not a
+  campaign.
+- **Consistency.** A fixed model applies identical physics to every candidate,
+  so its errors are *systematic* and largely cancel in hull/residual comparisons.
 
-## 2. Model choice
+**Why an ensemble — the off-distribution safeguard.** Any single uMLIP is least
+reliable **off-distribution**, which is exactly where our more exotic fictional
+compositions live. Instead of trusting one model there, we run several
+*independently-trained* potentials (MACE, CHGNet, ORB) and treat their
+**disagreement** as the confidence signal: when they concur on the relaxed
+structure and energy, the verdict is trustworthy; when they diverge, the
+candidate is flagged **low-confidence / off-distribution** for manual scrutiny.
+The ensemble spread is our built-in "don't trust me here" detector — no external
+ground-truth step required (see §9).
 
-Default **MACE-MP-0** (best relaxation + phonon fidelity; heavier). Kept behind a
-thin adapter so the backend is swappable:
+## 2. The ensemble
 
-| Backend | Notes |
+| Member | Role |
 |---|---|
-| **MACE-MP-0** (default) | best accuracy, strong phonons; larger/slower |
-| CHGNet | lighter, includes magnetic moments |
-| ORB / MatterSim | fastest; for cheap mass pre-screen if throughput bites |
+| **MACE-MP-0** (primary) | relaxation, hull, phonons, elastic — best fidelity |
+| **CHGNet** | independent cross-check; includes magnetic moments |
+| **ORB** | independent cross-check; fast |
 
-All are ASE-`Calculator`-compatible, so relaxation/phonons use the same driver
-regardless of backend.
+The primary model drives relaxation and phonons; the others **re-score the
+relaxed structure** (and optionally re-relax) to produce the disagreement
+signal. All are ASE-`Calculator`-compatible, so every member runs through one
+driver behind a thin adapter, and the membership is configurable.
 
 ## 3. Decisions locked in
 
@@ -99,7 +97,7 @@ regardless of backend.
 
 ```
 candidates.csv + CIFs  (from discovery)
-  └─ 2a  RELAX  (uMLIP, gbt GPU)
+  └─ 2a  RELAX  (primary uMLIP, gbt GPU)
         • ASE relaxation (cell + positions) to local minimum
         • replace structure with relaxed; keep original CIF; record drift
         • total energy E_uMLIP
@@ -109,21 +107,25 @@ candidates.csv + CIFs  (from discovery)
         • → e_above_hull_umlip   (MP-frame, hull-comparable)
         • residual = e_above_hull_umlip − e_above_hull_predictor   (bias meter)
         • GATE: drop candidates with e_above_hull_umlip > verify_e_hull_max
-  └─ 2c  DYNAMICAL STABILITY  (only if e_above_hull_umlip ≤ phonon_e_hull_max)
-        • finite-displacement phonons (phonopy) with the same uMLIP
+  └─ 2c  ENSEMBLE CROSS-CHECK  (CHGNet, ORB re-score the relaxed cell)
+        • per-member energy / e_above_hull on the relaxed structure
+        • disagreement = spread across members (energy + structural)
+        • → ensemble_confidence flag (high / low = off-distribution)
+  └─ 2d  DYNAMICAL STABILITY  (only if e_above_hull_umlip ≤ phonon_e_hull_max)
+        • finite-displacement phonons (phonopy) with the primary uMLIP
         • min phonon frequency; flag imaginary modes (allow small Γ tolerance)
         • GATE: dynamically_stable = (no significant imaginary modes)
-  └─ 2d  (optional, later) ELASTIC TENSOR
+  └─ 2e  (optional, later) ELASTIC TENSOR
         • strain–stress with the uMLIP → K, G; re-check vs predicted moduli
   └─ WRITE BACK to candidates.csv + a batch calibration report
 ```
 
 **Local hull construction (2b detail).** For each candidate, pull the competing
 phases of its chemical system (from MP metadata / `mp-api`) and either (a) place
-the candidate's uMLIP formation energy on the MP DFT hull, or (b) — preferred for
+the candidate's uMLIP formation energy on the MP hull, or (b) — preferred for
 self-consistency — relax the competing phases with the *same* uMLIP so systematic
 model errors cancel, then build the hull with `pymatgen`'s `PhaseDiagram`. Choice
-is an open decision (§10).
+is an open decision (§11).
 
 ## 5. The calibration signal (bias meter)
 
@@ -149,6 +151,8 @@ Verification **appends columns** to the existing `candidates.csv` (no new store)
 | `formation_energy_umlip` | uMLIP formation energy per atom |
 | `predictor_residual` | `e_above_hull_umlip − e_above_hull_predictor` |
 | `relax_rmsd`, `relax_dvol`, `relax_de` | relaxation drift diagnostics |
+| `ensemble_e_hull_spread` | disagreement across ensemble members (eV/atom) |
+| `ensemble_confidence` | `high` vs `low` (low = off-distribution, scrutinize) |
 | `dynamically_stable` | phonon verdict (True/False/`--` if not run) |
 | `min_phonon_freq` | most-negative phonon frequency (THz) |
 | `verify_tier` | `screened` (discovery) vs `verified` (passed Tier 2) |
@@ -163,31 +167,43 @@ Verification **appends columns** to the existing `candidates.csv` (no new store)
 - **Reused**: `pymatgen` (Structure/CIF I/O, `PhaseDiagram`, hull), the existing
   registry read/write in `discovery/loop.py`, MP access in
   `data/materials_project.py`.
-- **New**: `mace-torch` (or `chgnet`), `ase` (relaxation driver / FrechetCellFilter),
-  `phonopy` (finite-displacement phonons). All CPU/ROCm-friendly; no CUDA-only
-  ops. Add to `requirements.txt` (and note in README install).
+- **New**: `mace-torch`, `chgnet`, `orb-models` (the ensemble members), `ase`
+  (relaxation driver / FrechetCellFilter), `phonopy` (finite-displacement
+  phonons). All run on PyTorch/ROCm; no CUDA-only ops. Add to `requirements.txt`
+  (and note in README install).
 
 ## 8. Module layout (planned)
 
 ```
 phlogiston/verify/
   DESIGN.md          # this file
-  potential.py       # uMLIP backend adapter (MACE default) → ASE Calculator
+  potential.py       # uMLIP backend adapters (MACE/CHGNet/ORB) → ASE Calculator
+  ensemble.py        # multi-potential re-score + disagreement/confidence
   relax.py           # ASE relaxation; drift metrics; replace-with-relaxed
   hull.py            # local PhaseDiagram + e_above_hull_umlip + residual
   phonons.py         # phonopy finite-displacement; imaginary-mode gate
-  elastic.py         # (optional, 2d) strain–stress moduli
+  elastic.py         # (optional, 2e) strain–stress moduli
   verify.py          # orchestrator: registry → stages → write-back + report
 ```
-CLI: a `verify` subcommand (`--save-dir`, thresholds, `--backend`, `--no-phonons`,
+CLI: a `verify` subcommand (`--save-dir`, thresholds, `--members`, `--no-phonons`,
 `--elastic`) mirroring `discover`'s ergonomics.
 
-## 9. Tier 3 (DFT) — deliberately out of pipeline
+## 9. Off-distribution safeguard — ensemble disagreement
 
-A single DFT confirmation for an exotic finalist, run manually on HPC/cloud
-(atomate2 + MP-compatible input set + custodian for error recovery). Not built
-now; the verified registry (relaxed CIFs + uMLIP verdicts) is exactly the
-hand-off artifact it would consume.
+The ensemble is how we stay honest on exotic compositions without any external
+ground-truth step. After relaxation, every member re-evaluates the relaxed cell;
+we summarize their **spread** in energy / `e_above_hull` (and, optionally,
+whether independent re-relaxations converge to the same geometry):
+
+- **Tight agreement** → the region is well-covered by the potentials' training
+  data; the verdict (near-hull + dynamically stable) is trustworthy.
+- **Wide disagreement** → the candidate sits off-distribution for at least one
+  model; it's flagged `ensemble_confidence = low` and surfaced for manual review
+  rather than silently trusted or dropped.
+
+This turns the single biggest weakness of foundation potentials — unreliability
+off-distribution — into an explicit, per-candidate confidence estimate, and it's
+the documented substitute for a separate physics-confirmation tier.
 
 ## 10. Build plan (incremental, validated)
 
@@ -203,12 +219,13 @@ hand-off artifact it would consume.
 
 ## 11. Open decisions
 
-- uMLIP backend (MACE-MP-0 vs CHGNet) and version pinning.
-- Local hull: MP-DFT competitors vs uMLIP-relaxed competitors (self-consistent).
+- Ensemble membership (MACE-MP-0 + CHGNet + ORB?) and version pinning.
+- Disagreement metric + `ensemble_confidence` threshold; energy-spread only vs
+  also structural (re-relax) agreement.
+- Local hull: MP competitors vs uMLIP-relaxed competitors (self-consistent).
 - Thresholds: `verify_e_hull_max` (stability gate) and `phonon_e_hull_max`
   (phonon trigger) — likely tighter than discovery's 0.1 eV/atom.
 - Phonon rigor: Γ-point only (fast) vs small mesh; imaginary-mode tolerance.
 - Whether to feed the calibration offset back into discovery automatically or
   keep it advisory (report only).
-- Include Tier-2d elastic re-verification in v1 or defer.
-```
+- Include Tier-2e elastic re-verification in v1 or defer.

@@ -10,7 +10,8 @@ implausibly large ordered stoichiometries.
 
 It's deliberately conservative -- it should reject the clearly-impossible, not
 adjudicate the merely-unusual. The learned Tier-1 synthesizability model and
-Tier-2 DFT verification are the sharper (and more expensive) arbiters.
+Tier-2 physics verification (ensemble uMLIP) are the sharper (and more
+expensive) arbiters.
 
 No new hard dependency: radioactivity and charge balance come from pymatgen. If
 ``smact`` is importable we additionally use its validity test as a soft signal.
