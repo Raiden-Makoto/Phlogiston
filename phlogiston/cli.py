@@ -218,6 +218,7 @@ def _cmd_fit_latent_head(args: argparse.Namespace) -> int:
 def _cmd_discover(args: argparse.Namespace) -> int:
     from phlogiston.discovery import discover, format_report
 
+    stats: dict = {}
     ranked = discover(
         args.generator,
         args.predictor,
@@ -239,8 +240,27 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         max_elements=args.max_elements,
         max_reduced_atoms=args.max_reduced_atoms,
         allow_radioactive=args.allow_radioactive,
+        stats_out=stats,
     )
-    print("\n" + format_report(ranked, top_k=args.top_k))
+    print("\n" + format_report(ranked, top_k=args.top_k, stats=stats))
+    return 0
+
+
+def _cmd_show_candidates(args: argparse.Namespace) -> int:
+    import csv
+    from pathlib import Path
+
+    from phlogiston.discovery import format_report
+
+    path = Path(args.save_dir) / "candidates.csv"
+    if not path.exists():
+        print(f"No registry at {path}; run `discover --save-dir {args.save_dir}` first.")
+        return 1
+    with open(path) as f:
+        rows = list(csv.DictReader(f))
+    rows.sort(key=lambda r: float(r.get("score") or 0.0), reverse=True)
+    print(format_report(rows, top_k=args.top_k))
+    print(f"\n{len(rows)} candidates in registry: {path}")
     return 0
 
 
@@ -624,6 +644,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Trust-region radius for latent optimization (keeps z on-manifold)",
     )
     dc.set_defaults(func=_cmd_discover)
+
+    scmd = sub.add_parser("show-candidates", help="Pretty-print the saved candidate registry")
+    scmd.add_argument("--save-dir", required=True, help="Directory holding candidates.csv")
+    scmd.add_argument("--top-k", type=int, default=20, help="How many candidates to show")
+    scmd.set_defaults(func=_cmd_show_candidates)
 
     fh = sub.add_parser("fit-latent-head", help="Fit f_p(z) on a CDVAE for conditioning")
     fh.add_argument("--generator", required=True, help="CDVAE checkpoint (.pt)")

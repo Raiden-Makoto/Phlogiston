@@ -85,6 +85,7 @@ def discover(
     check_novelty: bool = True,
     check_feasibility: bool = True,
     save_dir: str | None = None,
+    stats_out: dict | None = None,
     max_elements: int = 5,
     max_reduced_atoms: int = 40,
     allow_radioactive: bool = False,
@@ -133,19 +134,24 @@ def discover(
         log(f"[discover] sampling {n_samples} candidates (unconditional) ...")
         structures = sample_candidates(generator, n_samples, steps_per_level)
     log(f"[discover] {len(structures)} valid structures generated")
+    stats = stats_out if stats_out is not None else {}
+    stats["generated"] = len(structures)
 
     scored = screen.score(structures)
     log(f"[discover] {len(scored)} featurized + scored")
+    stats["scored"] = len(scored)
 
     if do_dedup:
         scored = dedup(scored)
         log(f"[discover] {len(scored)} unique after dedup")
+        stats["unique"] = len(scored)
 
     if check_novelty:
         ref = load_reference_formulas(data_root)
         if ref:
             scored, known = novelty_filter(scored, ref)
             log(f"[discover] {len(scored)} novel formulas ({len(known)} already in GNoME/MP)")
+            stats["novel"] = len(scored)
         else:
             log("[discover] no reference formulas found; skipping novelty filter")
 
@@ -160,6 +166,7 @@ def discover(
             f"[discover] {len(scored)} pass Tier-0 feasibility "
             f"({len(infeasible)} rejected: too many elements / radioactive / implausible stoichiometry)"
         )
+        stats["Tier-0"] = len(scored)
 
     if synth_model is not None and synth_min > 0:  # Tier-1 learned synthesizability gate
         # Deliberately loose: the model reflects *today's* synthesis record, so a
@@ -169,9 +176,11 @@ def discover(
         before = len(scored)
         scored = [c for c in scored if c.properties.get("synthesizability", 0.0) >= synth_min]
         log(f"[discover] {len(scored)} pass Tier-1 synthesizability >= {synth_min} ({before - len(scored)} rejected)")
+        stats["Tier-1"] = len(scored)
 
     ranked = rank_candidates(scored, rho_max=rho_max, e_hull_max=e_hull_max, weights=weights)
     log(f"[discover] {len(ranked)} candidates pass stability gate (e_hull<={e_hull_max})")
+    stats["stable"] = len(ranked)
     if save_dir and ranked:
         save_candidates(ranked, save_dir, verbose=verbose)
     return ranked
@@ -261,27 +270,69 @@ def save_candidates(candidates, save_dir: str, *, run_id: str | None = None,
     return added
 
 
-def format_report(candidates, top_k: int = 10) -> str:
-    """Human-readable property card for the top candidates."""
-    if not candidates:
-        return "No candidates survived the stability gate."
-    lines = [f"Top {min(top_k, len(candidates))} candidates:\n"]
-    for rank, c in enumerate(candidates[:top_k], start=1):
+def _rows_from_candidates(candidates):
+    """Uniform dict rows from ScoredCandidate objects (for the table formatter)."""
+    rows = []
+    for c in candidates:
         p = c.properties
-        star = " [Pareto]" if c.is_pareto else ""
-        feas = p.get("feasibility")
-        feas_str = f"  feas={feas:.2f}" if feas is not None else ""
-        synth = p.get("synthesizability")
-        synth_str = f"  synth={synth:.2f}" if synth is not None else ""
-        lines.append(
-            f"{rank:>2}. {c.formula:<14} score={c.score:.3f}{star}{feas_str}{synth_str}\n"
-            f"      Ehull={p.get('energy_above_hull', float('nan')):+.3f} eV/atom  "
-            f"rho={p.get('density', float('nan')):.2f} g/cm^3\n"
-            f"      K={p.get('bulk_modulus_vrh', float('nan')):.0f}  "
-            f"G={p.get('shear_modulus_vrh', float('nan')):.0f} GPa  "
-            f"Hv={p.get('vickers_hardness', float('nan')):.1f} GPa  "
-            f"Kic={p.get('fracture_toughness', float('nan')):.2f}\n"
-            f"      Debye={p.get('debye_temperature', float('nan')):.0f} K  "
-            f"kappa={p.get('slack_thermal_conductivity', float('nan')):.1f} W/m/K"
+        r = {"formula": c.formula, "score": c.score, "is_pareto": c.is_pareto}
+        for k in _CANDIDATE_COLUMNS[6:]:
+            r[k] = p.get(k)
+        rows.append(r)
+    return rows
+
+
+def _num(v, fmt: str) -> str:
+    """Format a value that may be None/'' (persisted as empty) or a number."""
+    try:
+        return format(float(v), fmt)
+    except (TypeError, ValueError):
+        return "--"
+
+
+def format_report(candidates, top_k: int = 10, stats: dict | None = None) -> str:
+    """A compact, aligned summary table for the top candidates.
+
+    ``candidates`` may be ScoredCandidate objects or plain dict rows (e.g. read
+    back from candidates.csv). ``stats`` (optional) prints the discovery funnel.
+    """
+    if not candidates:
+        return "No candidates survived the gates."
+    rows = _rows_from_candidates(candidates) if not isinstance(candidates[0], dict) else candidates
+    n = min(top_k, len(rows))
+
+    out: list[str] = []
+    if stats:
+        funnel = "  ->  ".join(f"{v} {k}" for k, v in stats.items())
+        out.append(f"Discovery funnel:  {funnel}")
+    out.append(f"\nTop {n} of {len(rows)} candidates  (light + strong + tough + heat-resistant):\n")
+
+    header = (
+        f"{'#':>2}  {'formula':<16}{'score':>6}{'P':>2}{'feas':>6}{'synth':>6}"
+        f"{'Ehull':>8}{'rho':>6}{'K':>5}{'G':>5}{'Hv':>6}{'Kic':>6}{'Debye':>7}{'kappa':>7}"
+    )
+    out.append(header)
+    out.append("-" * len(header))
+    for i, r in enumerate(rows[:n], start=1):
+        pareto = str(r.get("is_pareto")).lower() in ("true", "1")
+        out.append(
+            f"{i:>2}. {str(r['formula']):<15}"
+            f"{_num(r.get('score'), '.3f'):>6}"
+            f"{('*' if pareto else ''):>2}"
+            f"{_num(r.get('feasibility'), '.2f'):>6}"
+            f"{_num(r.get('synthesizability'), '.2f'):>6}"
+            f"{_num(r.get('energy_above_hull'), '+.3f'):>8}"
+            f"{_num(r.get('density'), '.2f'):>6}"
+            f"{_num(r.get('bulk_modulus_vrh'), '.0f'):>5}"
+            f"{_num(r.get('shear_modulus_vrh'), '.0f'):>5}"
+            f"{_num(r.get('vickers_hardness'), '.1f'):>6}"
+            f"{_num(r.get('fracture_toughness'), '.2f'):>6}"
+            f"{_num(r.get('debye_temperature'), '.0f'):>7}"
+            f"{_num(r.get('slack_thermal_conductivity'), '.1f'):>7}"
         )
-    return "\n".join(lines)
+    out.append("-" * len(header))
+    out.append(
+        "  score=multi-objective (0-1)  P=Pareto  feas=Tier-0 rules  synth=Tier-1 P(makeable)\n"
+        "  Ehull eV/atom  rho g/cm^3  K/G/Hv GPa  Kic MPa*m^0.5  Debye K  kappa W/m/K"
+    )
+    return "\n".join(out)
