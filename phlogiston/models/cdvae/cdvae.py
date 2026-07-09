@@ -156,6 +156,19 @@ class CDVAE(nn.Module):
             lat = Lattice.cubic(max((a + b + c) / 3.0, 2.0))
         return lat
 
+    # ---- batched GPU sampling ------------------------------------------
+    @torch.no_grad()
+    def sample_batch(self, z=None, n: int = 64, steps_per_level: int = 8, cutoff: float = 6.0):
+        """GPU-native batched sampler (see sampler.py): decodes ``z`` [B,d] (or
+        ``n`` random latents) into Structures in one batched Langevin trajectory.
+        Far faster than looping :meth:`sample` (one decoder forward per step for
+        the whole batch, torch neighbor search on-device, no per-step pymatgen)."""
+        from phlogiston.models.cdvae.sampler import batched_sample
+
+        if z is None:
+            z = torch.randn(n, self.latent_dim, device=next(self.parameters()).device)
+        return batched_sample(self, z, steps_per_level=steps_per_level, cutoff=cutoff)
+
     # ---- full ab-initio sampling ---------------------------------------
     @torch.no_grad()
     def sample(

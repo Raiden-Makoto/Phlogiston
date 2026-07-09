@@ -199,10 +199,6 @@ def generate_conditioned(
     device = device or next(cdvae.parameters()).device
     with torch.enable_grad():
         Z = optimize_latent(head, n, profile=profile, steps=steps, lr=lr, alpha=alpha, device=device)
-    structures = []
-    for i in range(n):
-        try:
-            structures.append(cdvae.sample(z=Z[i : i + 1], steps_per_level=steps_per_level))
-        except Exception:  # noqa: BLE001  skip degenerate samples
-            continue
-    return structures
+    from phlogiston.models.cdvae.sampler import batched_sample
+
+    return batched_sample(cdvae, Z, steps_per_level=steps_per_level)

@@ -12,6 +12,7 @@ from phlogiston.models.cdvae.conditioning import (
 from phlogiston.models.cdvae.decoder import CDVAEDecoder, ScoreOutput
 from phlogiston.models.cdvae.encoder import CDVAEEncoder, VAEOutput
 from phlogiston.models.cdvae.predictors import LatentPrediction, LatentPredictors
+from phlogiston.models.cdvae.sampler import batched_sample
 
 __all__ = [
     "CDVAE",
@@ -27,4 +28,5 @@ __all__ = [
     "optimize_latent",
     "generate_conditioned",
     "DEFAULT_PROFILE",
+    "batched_sample",
 ]

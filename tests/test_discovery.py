@@ -54,6 +54,15 @@ def test_sample_returns_structure():
     _check("CDVAE.sample returns a Structure", isinstance(s, Structure), f"N={len(s)}")
 
 
+def test_batched_sampler():
+    from pymatgen.core import Structure
+
+    m = CDVAE(latent_dim=16, mul=16, n_max=16, n_elements=100, n_levels=5, n_layers=2, correlation=1)
+    structs = m.sample_batch(n=4, steps_per_level=2)
+    ok = len(structs) == 4 and all(isinstance(s, Structure) and len(s) >= 1 for s in structs)
+    _check("batched_sample returns a batch of Structures", bool(ok), f"n={len(structs)}")
+
+
 def test_property_screen():
     model = Predictor(mul=16, n_layers=2, correlation=1)
     screen = PropertyScreen(model, device="cpu")
@@ -162,6 +171,7 @@ def test_latent_conditioning():
 if __name__ == "__main__":
     test_ema()
     test_sample_returns_structure()
+    test_batched_sampler()
     test_property_screen()
     test_decoupled_screen()
     test_ranking_and_pareto()

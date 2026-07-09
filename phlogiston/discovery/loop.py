@@ -39,15 +39,18 @@ def load_generator(ckpt_path: str, device: str | None = None, use_ema: bool = Tr
 
 
 @torch.no_grad()
-def sample_candidates(generator: CDVAE, n: int, steps_per_level: int = 4) -> list:
-    """Draw ``n`` ab-initio structures (N/lattice/composition from z)."""
-    structures = []
-    for _ in range(n):
-        try:
-            structures.append(generator.sample(steps_per_level=steps_per_level))
-        except Exception:  # noqa: BLE001  degenerate sample; skip
-            continue
-    return structures
+def sample_candidates(generator: CDVAE, n: int, steps_per_level: int = 8) -> list:
+    """Draw ``n`` ab-initio structures via the batched GPU sampler."""
+    try:
+        return generator.sample_batch(n=n, steps_per_level=steps_per_level)
+    except Exception:  # noqa: BLE001  fall back to per-structure sampling
+        out = []
+        for _ in range(n):
+            try:
+                out.append(generator.sample(steps_per_level=steps_per_level))
+            except Exception:  # noqa: BLE001
+                continue
+        return out
 
 
 def load_latent_head(head_ckpt: str, latent_dim: int, device: str):
