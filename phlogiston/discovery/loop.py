@@ -72,7 +72,7 @@ def discover(
     latent_head_ckpt: str | None = None,
     profile: dict[str, float] | None = None,
     cond_steps: int = 100,
-    cond_trust_radius: float = 6.0,
+    cond_trust_radius: float = 8.0,
     n_samples: int = 128,
     steps_per_level: int = 4,
     e_hull_max: float = 0.1,

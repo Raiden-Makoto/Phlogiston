@@ -531,7 +531,7 @@ def build_parser() -> argparse.ArgumentParser:
     dc.add_argument(
         "--cond-trust-radius",
         type=float,
-        default=6.0,
+        default=8.0,
         help="Trust-region radius for latent optimization (keeps z on-manifold)",
     )
     dc.set_defaults(func=_cmd_discover)
