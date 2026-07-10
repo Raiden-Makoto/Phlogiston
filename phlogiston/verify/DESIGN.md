@@ -226,7 +226,12 @@ the documented substitute for a separate physics-confirmation tier.
 1. ~~`potential.py` backend adapter + a sanity relax of a known solid (e.g. Si,
    NaCl) → energies/lattice match references.~~ **DONE** — CHGNet + MatterSim on
    ROCm GPU; `scripts/verify_potential.py` relaxes Si/NaCl/Cu to correct energies.
-2. `relax.py` on a handful of registry CIFs; verify drift metrics + replacement.
+2. ~~`relax.py` on a handful of registry CIFs; verify drift metrics +
+   replacement.~~ **DONE** — `scripts/verify_relax.py`. NB: the current registry
+   candidates relax with *large* drift (rmsd ~0.2-1.6 A, |dV| up to 0.7, energy
+   drops of 1-11 eV/atom) and mostly fail to converge in 500 steps — direct
+   evidence the generator's raw cells are far off-manifold (the drift red-flag
+   working as intended). May warrant a higher default `steps` in verify.py.
 3. `hull.py`: reproduce a known MP `e_above_hull` for a real material within
    tolerance (validates the MP-frame comparison).
 4. `phonons.py`: confirm a stable solid has no imaginary modes and a known
