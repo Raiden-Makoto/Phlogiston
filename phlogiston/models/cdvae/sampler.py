@@ -32,6 +32,20 @@ class _Batch:
         self.edge_len = edge_len
 
 
+def frac_to_cart(frac: torch.Tensor, lat: torch.Tensor) -> torch.Tensor:
+    """Fractional -> cartesian per atom. ``lat`` rows are lattice vectors, so
+    ``r_j = sum_i f_i L_ij`` i.e. ``r = f @ L``. ``frac`` [T,3], ``lat`` [T,3,3]."""
+    return torch.einsum("ni,nij->nj", frac, lat)
+
+
+def cart_to_frac(pos: torch.Tensor, lat: torch.Tensor) -> torch.Tensor:
+    """Cartesian -> fractional per atom, the exact inverse of ``frac_to_cart``:
+    ``f = r @ L^{-1}`` i.e. ``f_i = sum_j r_j (L^{-1})_ji`` (note the transpose;
+    using ``(L^{-1})_ij`` here silently corrupts non-symmetric/triclinic cells)."""
+    inv = torch.linalg.inv(lat)
+    return torch.einsum("nj,nji->ni", pos, inv)
+
+
 def _image_range(lattice: torch.Tensor, cutoff: float) -> torch.Tensor:
     """Per-axis number of periodic images needed to cover ``cutoff`` [3] ints."""
     recip = torch.linalg.inv(lattice).transpose(-1, -2)  # rows = reciprocal vecs (no 2pi)
@@ -116,7 +130,7 @@ def batched_sample(
     off = torch.cat(off_all)
 
     def cart():
-        return torch.einsum("ni,nij->nj", frac, node_lat)  # frac -> cartesian
+        return frac_to_cart(frac, node_lat)
 
     sigmas = cdvae.sigmas.tolist()
     for sigma in sigmas:
@@ -133,7 +147,7 @@ def batched_sample(
             out: ScoreOutput = cdvae.decoder(graph, z, sig_vec)
             pos = pos + 0.5 * alpha * out.coord_score + (alpha**0.5) * torch.randn_like(pos)
             # wrap back into each cell (cartesian -> frac, mod 1)
-            frac = torch.einsum("nj,nij->ni", pos, torch.linalg.inv(node_lat)) % 1.0
+            frac = cart_to_frac(pos, node_lat) % 1.0
 
     # export
     structures = []

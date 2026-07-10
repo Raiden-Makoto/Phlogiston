@@ -54,6 +54,28 @@ def sample_candidates(generator: CDVAE, n: int, steps_per_level: int = 8) -> lis
         return out
 
 
+def drop_clashed(structures: list, min_dist: float = 0.7) -> tuple[list, int]:
+    """Reject structures with a hard atomic clash (min interatomic distance below
+    ``min_dist`` Angstrom under PBC). The shortest real bond (~0.74 A for H2) sets
+    a physical floor; anything tighter is an unphysical overlap the sampler
+    occasionally emits, and it only produces a positive-energy outlier downstream.
+    Returns the kept structures and the number dropped."""
+    import numpy as np
+
+    kept, dropped = [], 0
+    for s in structures:
+        if len(s) < 2:
+            kept.append(s)
+            continue
+        dm = s.distance_matrix
+        iu = np.triu_indices(len(s), k=1)
+        if float(dm[iu].min()) < min_dist:
+            dropped += 1
+        else:
+            kept.append(s)
+    return kept, dropped
+
+
 def load_latent_head(head_ckpt: str, latent_dim: int, device: str):
     """Load a fitted LatentPropertyHead from a checkpoint."""
     from phlogiston.models.cdvae import LatentPropertyHead
@@ -136,6 +158,11 @@ def discover(
     log(f"[discover] {len(structures)} valid structures generated")
     stats = stats_out if stats_out is not None else {}
     stats["generated"] = len(structures)
+
+    structures, clashed = drop_clashed(structures)
+    if clashed:
+        log(f"[discover] {clashed} dropped for atomic clash (<0.7A); {len(structures)} geometrically sane")
+    stats["unclashed"] = len(structures)
 
     scored = screen.score(structures)
     log(f"[discover] {len(scored)} featurized + scored")
