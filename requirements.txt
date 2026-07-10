@@ -20,5 +20,20 @@ mp-api>=0.41.2            # Materials Project structural records
 e3nn>=0.5                 # spherical harmonics, Clebsch-Gordan tensor products
 torch-geometric>=2.6      # Data/Batch containers + pure-torch scatter (no pyg-lib)
 
+# Tier-2 verification: ensemble universal ML interatomic potentials (uMLIPs) +
+# relaxation/phonon tooling. All are PyTorch/NumPy based (ROCm-friendly). They
+# depend on `torch` but only with lower bounds, so pip keeps the ROCm build
+# already shipped by the base image (the Dockerfile also strips bare torch pins).
+#
+# NOTE: mace-torch is intentionally omitted -- it hard-pins e3nn==0.4.4, which
+# conflicts with the e3nn>=0.5 our from-scratch models are built + verified on
+# (same interpreter). CHGNet and ORB are e3nn-free and are also MPtrj-trained
+# (equally MP-hull-compatible), so they form the ensemble. Revisit MACE later via
+# an isolated env / --no-deps if we want a third member.
+chgnet                   # CHGNet foundation potential (primary; MPtrj-trained)
+orb-models               # ORB foundation potential (independent cross-check)
+ase>=3.23                # relaxation driver (optimizers, cell filters), I/O
+phonopy>=2.21            # finite-displacement phonons (dynamical stability)
+
 # Optional: plotting for evaluation curves
 matplotlib>=3.8
