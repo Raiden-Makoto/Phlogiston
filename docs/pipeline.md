@@ -268,7 +268,7 @@ is **inside the generation loop** — the latent optimizer ascends the predictor
 own hull estimate, so candidates cluster where that predictor is optimistic
 (grading our own homework). Tier 2 brings in models that never saw the loop: an
 **ensemble of pretrained universal ML interatomic potentials (uMLIPs)** —
-CHGNet is the wired primary, with ORB pending as an independent cross-check.
+CHGNet (primary) and MatterSim (independent cross-check), both wired on ROCm.
 
 - **Relax** each candidate to its true local minimum (the predictor scores the
   as-generated, unrelaxed cell — a structure that doesn't physically exist); the

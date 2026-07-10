@@ -73,26 +73,25 @@ ground-truth step required (see §9).
 | Member | Status | Role |
 |---|---|---|
 | **CHGNet** (primary) | **wired + tested on ROCm** | relaxation, hull, phonons, elastic |
-| **ORB** | pending | independent cross-check (see note) |
+| **MatterSim** | **wired + tested on ROCm** | independent cross-check (disagreement) |
 | ~~MACE-MP-0~~ | excluded | hard-pins `e3nn==0.4.4` vs our `e3nn>=0.5` |
+| ~~ORB~~ | excluded | 0.7.0 dropped its ASE calc + needs CUDA-only `warp` |
 
-The primary model drives relaxation and phonons; the others **re-score the
-relaxed structure** (and optionally re-relax) to produce the disagreement
+The primary model drives relaxation and phonons; the other **re-scores the
+relaxed structure** (and optionally re-relaxes) to produce the disagreement
 signal. Backends are constructed through one adapter (`potential.py`,
 `load_calculator(backend, device)`) so every member runs through the same ASE
 driver, and membership is configurable.
 
-> **Reality notes (from wiring it up).** MACE-MP-0, though the highest-fidelity
-> option, hard-pins `e3nn==0.4.4`, which conflicts with the `e3nn>=0.5` our
-> from-scratch models are built and verified on (same interpreter) — so it's
-> out unless installed in an isolated env. `orb-models` 0.7.0 dropped its ASE
-> `Calculator` and changed its loader API (returns a `(model, adapter)` tuple),
-> and depends on `warp-lang` which has no ROCm GPU path; wiring it needs a small
-> custom ASE wrapper (or a pinned older release). **CHGNet is the working
-> primary**: MPtrj-trained (MP-frame hull-comparable), e3nn-free, ships an ASE
-> calculator, and relaxes known solids correctly on the MI350X GPUs. The
-> ensemble therefore starts single-model and gains its second member once ORB
-> (or an alternative MPtrj-trained, ASE-ready potential) is wired.
+> **Reality notes (from wiring it up).** Two obvious members didn't fit this
+> ROCm + from-scratch stack. **MACE-MP-0** hard-pins `e3nn==0.4.4`, conflicting
+> with the `e3nn>=0.5` our models are built/verified on (same interpreter).
+> **ORB** 0.7.0 dropped its ASE `Calculator`, changed its loader API, and depends
+> on `warp-lang` (no ROCm GPU path). **CHGNet** (primary) and **MatterSim** both
+> ship ASE calculators, install conflict-free, and relax Si/NaCl/Cu to correct
+> energies on the MI350X GPUs — and their energies differ enough to give a real
+> disagreement signal. CHGNet bundles its weights (offline); MatterSim downloads
+> them once on first use (then cached).
 
 ## 3. Decisions locked in
 
@@ -180,19 +179,21 @@ Verification **appends columns** to the existing `candidates.csv` (no new store)
 - **Reused**: `pymatgen` (Structure/CIF I/O, `PhaseDiagram`, hull), the existing
   registry read/write in `discovery/loop.py`, MP access in
   `data/materials_project.py`.
-- **New (installed + import-checked on ROCm)**: `chgnet` (primary uMLIP),
-  `orb-models` (member pending an ASE wrapper), `ase` (relaxation driver /
-  `FrechetCellFilter`), `phonopy` (finite-displacement phonons). `mace-torch` is
-  deliberately **not** installed (its `e3nn==0.4.4` pin clashes with our
-  `e3nn>=0.5`). All are in `requirements.txt`; the ROCm image builds and the
-  full relaxation path runs on the MI350X GPUs.
+- **New (installed + tested on ROCm)**: `chgnet` (primary uMLIP), `mattersim`
+  (cross-check uMLIP), `ase` (relaxation driver / `FrechetCellFilter`), `phonopy`
+  (finite-displacement phonons). `mace-torch` and `orb-models` are deliberately
+  **not** used (e3nn pin / dropped-ASE-calc + CUDA-only warp, respectively). All
+  are in `requirements.txt`; the ROCm image builds and the full relaxation path
+  runs on the MI350X GPUs. NB: `mattersim` pulls a heavy dependency tail
+  (`atomate2`, `wandb`, `azure-*`, ...) that our code never imports — candidate
+  for slimming later.
 
 ## 8. Module layout (planned)
 
 ```
 phlogiston/verify/
   DESIGN.md          # this file
-  potential.py       # uMLIP backend adapters (CHGNet done; ORB pending) → ASE Calculator  [DONE]
+  potential.py       # uMLIP backend adapters (CHGNet + MatterSim) → ASE Calculator  [DONE]
   ensemble.py        # multi-potential re-score + disagreement/confidence
   relax.py           # ASE relaxation; drift metrics; replace-with-relaxed
   hull.py            # local PhaseDiagram + e_above_hull_umlip + residual
@@ -223,8 +224,8 @@ the documented substitute for a separate physics-confirmation tier.
 ## 10. Build plan (incremental, validated)
 
 1. ~~`potential.py` backend adapter + a sanity relax of a known solid (e.g. Si,
-   NaCl) → energies/lattice match references.~~ **DONE** — CHGNet on ROCm GPU;
-   `scripts/verify_potential.py` relaxes Si/NaCl/Cu to correct energies.
+   NaCl) → energies/lattice match references.~~ **DONE** — CHGNet + MatterSim on
+   ROCm GPU; `scripts/verify_potential.py` relaxes Si/NaCl/Cu to correct energies.
 2. `relax.py` on a handful of registry CIFs; verify drift metrics + replacement.
 3. `hull.py`: reproduce a known MP `e_above_hull` for a real material within
    tolerance (validates the MP-frame comparison).
@@ -235,9 +236,10 @@ the documented substitute for a separate physics-confirmation tier.
 
 ## 11. Open decisions
 
-- Ensemble second member: wire ORB 0.7.0 via a custom ASE wrapper, pin an older
-  orb-models with `ORBCalculator`, or swap in another MPtrj-trained ASE-ready
-  potential (MACE excluded by the `e3nn` pin). CHGNet is the confirmed primary.
+- Ensemble = CHGNet (primary) + MatterSim (cross-check), both wired. Optional
+  third member later (would need to be ASE-ready + ROCm/stack-compatible).
+- Slim MatterSim's heavy dependency tail (atomate2/wandb/azure) if image size
+  matters.
 - Disagreement metric + `ensemble_confidence` threshold; energy-spread only vs
   also structural (re-relax) agreement.
 - Local hull: MP competitors vs uMLIP-relaxed competitors (self-consistent).

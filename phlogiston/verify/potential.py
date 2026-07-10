@@ -9,16 +9,16 @@ candidate on the MP convex hull without any first-principles recomputation.
 
 Backends
 --------
-- ``chgnet`` — CHGNet (default/primary). Ships an ASE calculator; e3nn-free, so
-  it coexists with our from-scratch models' ``e3nn>=0.5`` requirement.
-- ``orb``    — ORB. **Not yet wired**: ``orb-models`` 0.7.0 dropped its ASE
-  ``Calculator`` and changed the loader API (loaders now return a
-  ``(model, adapter)`` tuple), and it pulls in ``warp-lang`` which cannot use
-  ROCm GPUs. Needs a small custom ASE wrapper (or a pinned older release) before
-  it can join the ensemble. See ``_orb_calculator``.
+- ``chgnet``    — CHGNet (default/primary). Ships an ASE calculator, bundles its
+  weights (no network), and is e3nn-free so it coexists with our from-scratch
+  models' ``e3nn>=0.5`` requirement.
+- ``mattersim`` — MatterSim (independent cross-check). Ships an ASE calculator;
+  downloads its pretrained weights on first use (needs network once, then
+  cached under ``~/.local/mattersim``).
 
-MACE is intentionally absent: it hard-pins ``e3nn==0.4.4``, which conflicts with
-our verified ``e3nn>=0.5`` stack (see requirements.txt).
+Two potentials excluded for compatibility (see requirements.txt): **MACE**
+hard-pins ``e3nn==0.4.4`` (conflicts with our ``e3nn>=0.5``), and **ORB** 0.7.0
+dropped its ASE calculator and depends on CUDA-only ``warp-lang``.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
 # Registry of backends this module knows how to construct. Order = ensemble
 # preference; the first available one is the default primary.
-SUPPORTED_BACKENDS: tuple[str, ...] = ("chgnet", "orb")
+SUPPORTED_BACKENDS: tuple[str, ...] = ("chgnet", "mattersim")
 DEFAULT_BACKEND: str = "chgnet"
 
 
@@ -58,8 +58,8 @@ def load_calculator(
     dev = resolve_device(device)
     if key == "chgnet":
         return _chgnet_calculator(device=dev, **kwargs)
-    if key == "orb":
-        return _orb_calculator(device=dev, **kwargs)
+    if key == "mattersim":
+        return _mattersim_calculator(device=dev, **kwargs)
     raise ValueError(
         f"Unknown uMLIP backend {backend!r}; supported: {SUPPORTED_BACKENDS}"
     )
@@ -68,14 +68,12 @@ def load_calculator(
 def available_backends() -> dict[str, bool]:
     """Which backends are importable in this environment (best-effort probe)."""
     status: dict[str, bool] = {}
-    try:
-        import chgnet  # noqa: F401
-
-        status["chgnet"] = True
-    except Exception:
-        status["chgnet"] = False
-    # ORB is installable but not yet wired to ASE here; report False until it is.
-    status["orb"] = False
+    for name, module in (("chgnet", "chgnet"), ("mattersim", "mattersim")):
+        try:
+            __import__(module)
+            status[name] = True
+        except Exception:
+            status[name] = False
     return status
 
 
@@ -87,13 +85,10 @@ def _chgnet_calculator(*, device: str, **kwargs: Any) -> Calculator:
     return CHGNetCalculator(use_device=device, **kwargs)
 
 
-def _orb_calculator(*, device: str, **kwargs: Any) -> Calculator:
-    raise NotImplementedError(
-        "ORB backend is not wired yet. orb-models 0.7.0 removed its ASE "
-        "Calculator and changed the loader API (pretrained.* now returns a "
-        "(model, adapter) tuple), and it depends on warp-lang which has no ROCm "
-        "GPU path. Options: (a) write a thin ASE Calculator around the 0.7.0 "
-        "model+adapter, (b) pin an older orb-models that ships ORBCalculator, or "
-        "(c) swap ORB for another MPtrj-trained, ASE-ready potential. Until then "
-        "the ensemble runs with chgnet only."
-    )
+def _mattersim_calculator(*, device: str, **kwargs: Any) -> Calculator:
+    """MatterSim as an ASE calculator. ``potential=None`` loads (and, on first
+    use, downloads + caches) the pretrained weights. ``device`` accepts
+    ``cuda``/``cpu``."""
+    from mattersim.forcefield import MatterSimCalculator
+
+    return MatterSimCalculator(device=device, **kwargs)

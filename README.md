@@ -107,7 +107,7 @@ checks only ever see survivors:
 |---|---|---|---|
 | **Tier 0** | Rule-based composition sanity: rejects radioactive elements, noble gases, too many distinct elements, oversized stoichiometries; soft-scores charge-balanceability (pymatgen oxidation guesses) + optional SMACT validity | `phlogiston/discovery/feasibility.py` | cheap |
 | **Tier 1** | Learned synthesizability classifier — P(makeable) trained on MP experimental provenance (ICSD / non-theoretical) as positives vs GNoME/theoretical as unlabeled | `phlogiston/models/synth/` | ML inference |
-| **Tier 2** | Independent physics verification: an **ensemble of uMLIPs** (CHGNet wired; ORB pending) relaxes each candidate, recomputes an MP-frame `energy_above_hull`, screens phonon dynamical stability, and flags off-distribution candidates via ensemble disagreement | `phlogiston/verify/` (`potential.py` done; `DESIGN.md`) | GPU (on-box) |
+| **Tier 2** | Independent physics verification: an **ensemble of uMLIPs** (CHGNet + MatterSim) relaxes each candidate, recomputes an MP-frame `energy_above_hull`, screens phonon dynamical stability, and flags off-distribution candidates via ensemble disagreement | `phlogiston/verify/` (`potential.py` done; `DESIGN.md`) | GPU (on-box) |
 
 The Tier-1 gate (`--synth-min`, default 0.3) is deliberately loose: the model
 reflects *today's* synthesis record, so a low bar admits borderline candidates
