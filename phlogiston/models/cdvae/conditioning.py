@@ -160,7 +160,7 @@ def optimize_latent(
     profile: dict[str, float] | None = None,
     steps: int = 100,
     lr: float = 0.05,
-    trust_radius: float = 8.0,
+    trust_radius: float = 4.0,
     reward_cap: float = 2.0,
     alpha: float = 0.0,
     project_norm: bool = False,
@@ -178,9 +178,10 @@ def optimize_latent(
     * ``trust_radius`` -- after each step, clip the displacement ``z - z0`` to a
       ball of this radius around the (in-distribution) anchor ``z0``. The head is
       only trustworthy near real latents; this keeps z there. With d=256 the
-      anchor norm is ~16, so the default radius of 8 is a half-norm move -- the
-      strongest steering that still decodes 100% valid and moves every profile
-      target the right way in practice.
+      anchor norm is ~16, so the default radius of 4 is a quarter-norm move.
+      (A half-norm move, radius 8, still decodes geometrically valid cells but
+      steers far enough off-manifold that the independent Tier-2 uMLIP hull found
+      large predictor residuals -- optimism/gaming -- so the default was tightened.)
     * ``reward_cap`` -- saturate each per-target reward with ``cap*tanh(pred/cap)``
       (standardized units). This tells the optimizer to aim for a *realistically
       strong* material (~cap sigma above the mean) and removes any incentive to
@@ -225,7 +226,7 @@ def generate_conditioned(
     profile: dict[str, float] | None = None,
     steps: int = 100,
     lr: float = 0.05,
-    trust_radius: float = 8.0,
+    trust_radius: float = 4.0,
     reward_cap: float = 2.0,
     steps_per_level: int = 4,
     device: str | None = None,

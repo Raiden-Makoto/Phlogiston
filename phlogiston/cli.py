@@ -670,8 +670,9 @@ def build_parser() -> argparse.ArgumentParser:
     dc.add_argument(
         "--cond-trust-radius",
         type=float,
-        default=8.0,
-        help="Trust-region radius for latent optimization (keeps z on-manifold)",
+        default=4.0,
+        help="Trust-region radius for latent optimization (keeps z on-manifold; "
+        "with d=256 the anchor norm is ~16, so 4 is a quarter-norm move)",
     )
     dc.set_defaults(func=_cmd_discover)
 
