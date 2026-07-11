@@ -20,7 +20,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from phlogiston.verify.ensemble import ensemble_cross_check
 from phlogiston.verify.hull import CompetitorCache, build_competitor_entries, refined_hull_distance
+from phlogiston.verify.phonons import phonon_stability
 from phlogiston.verify.potential import DEFAULT_BACKEND, load_calculator
 from phlogiston.verify.relax import relax_structure
 
@@ -33,6 +35,11 @@ VERIFY_COLUMNS = [
     "relax_dvol",
     "relax_de",
     "relax_converged",
+    "e_above_hull_umlip_secondary",
+    "ensemble_e_hull_spread",
+    "ensemble_confidence",
+    "dynamically_stable",
+    "min_phonon_freq",
     "verify_tier",
     "relaxed_cif",
 ]
@@ -56,6 +63,13 @@ class VerifyRow:
     relaxed_cif: str
     chemsys: str
     n_competitors: int
+    # 2c ensemble cross-check (None if not run)
+    e_above_hull_secondary: float | None = None
+    ensemble_spread: float | None = None
+    ensemble_confidence: str | None = None
+    # 2d phonons (None if not run)
+    min_phonon_freq: float | None = None
+    dynamically_stable: bool | None = None
 
 
 @dataclass
@@ -85,11 +99,23 @@ def verify_registry(
     ehull_cutoff: float = 0.05,
     relax_steps: int = 500,
     competitor_relax_steps: int = 200,
+    cross_backend: str | None = "mattersim",
+    ensemble_spread_max: float = 0.05,
+    do_phonons: bool = True,
+    phonon_e_hull_max: float = 0.05,
+    phonon_supercell_min_len: float = 8.0,
+    phonon_displacement: float = 0.03,
+    phonon_mesh: int = 8,
+    phonon_tol: float = 0.1,
     device: str | None = None,
     api_key: str | None = None,
     verbose: bool = True,
 ) -> VerifyReport:
     """Verify (a subset of) a discovery registry and append results in place.
+
+    Runs 2a relax + 2b self-consistent hull on every target, then -- only on the
+    candidates that pass the 2b gate -- 2c ensemble cross-check (``cross_backend``)
+    and 2d phonons (on those within ``phonon_e_hull_max`` of the hull).
 
     Parameters
     ----------
@@ -98,6 +124,8 @@ def verify_registry(
     verify_e_hull_max : gate; candidates with ``e_above_hull_umlip`` above this
         are tagged ``screened`` rather than ``verified``.
     ehull_cutoff : only MP competitors within this DFT hull distance are relaxed.
+    cross_backend : secondary uMLIP for the ensemble check (None disables 2c).
+    do_phonons : run 2d dynamical-stability phonons on near-hull survivors.
     """
     import pandas as pd
 
@@ -117,10 +145,14 @@ def verify_registry(
     else:
         df_sorted = df
     targets = df_sorted.head(top_k) if top_k else df_sorted
-    log(f"[verify] loaded {len(df)} candidates; verifying {len(targets)} with backend={backend}")
+    stages = f"2a+2b{'+2c' if cross_backend else ''}{'+2d' if do_phonons else ''}"
+    log(f"[verify] loaded {len(df)} candidates; verifying {len(targets)} "
+        f"[{stages}] backend={backend}" + (f" cross={cross_backend}" if cross_backend else ""))
 
     calc = load_calculator(backend, device=device)
     cache = CompetitorCache(save / "verify_cache" / f"umlip_{backend}.json")
+    calc2 = load_calculator(cross_backend, device=device) if cross_backend else None
+    cache2 = CompetitorCache(save / "verify_cache" / f"umlip_{cross_backend}.json") if cross_backend else None
     relaxed_dir = save / "relaxed"
     relaxed_dir.mkdir(parents=True, exist_ok=True)
 
@@ -169,7 +201,7 @@ def verify_registry(
         except Exception:  # noqa: BLE001
             rel_path = ""
 
-        report.rows.append(VerifyRow(
+        vrow = VerifyRow(
             id=cid, formula=formula, e_above_hull_pred=e_pred,
             e_above_hull_umlip=hull.e_above_hull_umlip,
             formation_energy_umlip=hull.formation_energy_umlip,
@@ -177,13 +209,48 @@ def verify_registry(
             relax_rmsd=rr.rmsd, relax_dvol=rr.dvol_frac, relax_de=rr.de,
             relax_converged=rr.converged, verify_tier=tier, relaxed_cif=rel_path,
             chemsys=hull.chemsys, n_competitors=hull.n_competitors,
-        ))
+        )
         log(
             f"[verify] {cid:05d} {formula:<16} e_hull_umlip={hull.e_above_hull_umlip:+.3f} "
             f"(pred {('%+.3f' % e_pred) if e_pred is not None else '  --'}, "
             f"resid {('%+.3f' % residual) if residual is not None else '--'})  "
             f"rmsd={rr.rmsd:.2f} de={rr.de:+.2f}  [{tier}]  ({hull.n_competitors} competitors)"
         )
+
+        # 2c/2d only on candidates that pass the 2b stability gate.
+        if tier == "verified":
+            if calc2 is not None:
+                try:
+                    ens = ensemble_cross_check(
+                        rr.structure, hull.e_above_hull_umlip, calc2, cache2, cross_backend,
+                        spread_max=ensemble_spread_max, relax_steps=relax_steps,
+                        competitor_relax_steps=competitor_relax_steps, ehull_cutoff=ehull_cutoff,
+                        api_key=api_key, verbose=verbose,
+                    )
+                    vrow.e_above_hull_secondary = ens.e_above_hull_secondary
+                    vrow.ensemble_spread = ens.spread
+                    vrow.ensemble_confidence = ens.confidence
+                    log(f"[verify]       2c {cross_backend}: e_hull={ens.e_above_hull_secondary:+.3f} "
+                        f"spread={ens.spread:.3f} -> {ens.confidence}-confidence")
+                except Exception as exc:  # noqa: BLE001
+                    log(f"[verify]       2c cross-check failed: {exc}")
+
+            if do_phonons and hull.e_above_hull_umlip <= phonon_e_hull_max:
+                try:
+                    ph = phonon_stability(
+                        rr.structure, calc,
+                        supercell_min_len=phonon_supercell_min_len,
+                        displacement=phonon_displacement, mesh=phonon_mesh, tol_thz=phonon_tol,
+                    )
+                    vrow.min_phonon_freq = ph.min_freq_thz
+                    vrow.dynamically_stable = ph.dynamically_stable
+                    log(f"[verify]       2d phonons: min_freq={ph.min_freq_thz:+.2f} THz "
+                        f"({'stable' if ph.dynamically_stable else 'IMAGINARY'}) "
+                        f"[{'x'.join(map(str, ph.supercell))} sc, {ph.n_displacements} disp]")
+                except Exception as exc:  # noqa: BLE001
+                    log(f"[verify]       2d phonons failed: {exc}")
+
+        report.rows.append(vrow)
 
     _write_back(df, report, csv_path)
     _write_calibration_report(report, save / "verify_report.txt", verify_e_hull_max)
@@ -213,6 +280,15 @@ def _write_back(df, report: VerifyReport, csv_path: Path) -> None:
         df.at[i, "relax_dvol"] = round(r.relax_dvol, 4)
         df.at[i, "relax_de"] = round(r.relax_de, 4)
         df.at[i, "relax_converged"] = bool(r.relax_converged)
+        df.at[i, "e_above_hull_umlip_secondary"] = (
+            round(r.e_above_hull_secondary, 4) if r.e_above_hull_secondary is not None else "")
+        df.at[i, "ensemble_e_hull_spread"] = (
+            round(r.ensemble_spread, 4) if r.ensemble_spread is not None else "")
+        df.at[i, "ensemble_confidence"] = r.ensemble_confidence or ""
+        df.at[i, "dynamically_stable"] = (
+            bool(r.dynamically_stable) if r.dynamically_stable is not None else "")
+        df.at[i, "min_phonon_freq"] = (
+            round(r.min_phonon_freq, 4) if r.min_phonon_freq is not None else "")
         df.at[i, "verify_tier"] = r.verify_tier
         df.at[i, "relaxed_cif"] = r.relaxed_cif
     df.to_csv(csv_path, index=False)
@@ -243,6 +319,23 @@ def _write_calibration_report(report: VerifyReport, path: Path, gate: float) -> 
             "  (shift the discovery gate); large std => predictor gamed off-manifold",
             "  (tighten cond-trust-radius).",
         ]
+    # 2c ensemble confidence
+    ens = [r for r in rows if r.ensemble_confidence is not None]
+    if ens:
+        high = sum(1 for r in ens if r.ensemble_confidence == "high")
+        spreads = [r.ensemble_spread for r in ens if r.ensemble_spread is not None]
+        lines += [
+            "",
+            f"ensemble cross-check (2c): {high}/{len(ens)} high-confidence "
+            f"(spread <= threshold); mean spread={statistics.fmean(spreads):.4f} eV/atom"
+            if spreads else "",
+        ]
+    # 2d phonons
+    ph = [r for r in rows if r.dynamically_stable is not None]
+    if ph:
+        stable = sum(1 for r in ph if r.dynamically_stable)
+        lines += ["", f"phonons (2d): {stable}/{len(ph)} dynamically stable "
+                       f"(no imaginary modes beyond tolerance)"]
     if report.skipped:
         lines += ["", "skipped:"]
         lines += [f"  {cid:05d}: {reason}" for cid, reason in report.skipped]

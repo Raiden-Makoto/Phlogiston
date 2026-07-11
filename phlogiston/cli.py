@@ -275,6 +275,14 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         ehull_cutoff=args.ehull_cutoff,
         relax_steps=args.relax_steps,
         competitor_relax_steps=args.competitor_relax_steps,
+        cross_backend=None if args.no_ensemble else args.cross_backend,
+        ensemble_spread_max=args.ensemble_spread_max,
+        do_phonons=not args.no_phonons,
+        phonon_e_hull_max=args.phonon_e_hull_max,
+        phonon_supercell_min_len=args.phonon_supercell_min_len,
+        phonon_displacement=args.phonon_displacement,
+        phonon_mesh=args.phonon_mesh,
+        phonon_tol=args.phonon_tol,
         device=args.device,
     )
     if not report.rows:
@@ -283,14 +291,18 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     ranked = sorted(report.rows, key=lambda r: r.e_above_hull_umlip)
     print(f"\nVerified {len(report.rows)} candidates (sorted by uMLIP hull distance):\n")
     header = (f"{'id':>5}  {'formula':<16}{'Ehull_uMLIP':>12}{'Ehull_pred':>11}"
-              f"{'resid':>8}{'rmsd':>7}{'de':>7}  tier")
+              f"{'resid':>8}{'spread':>8}{'conf':>6}{'phonon':>8}{'dyn':>5}  tier")
     print(header)
     print("-" * len(header))
     for r in ranked:
         ep = f"{r.e_above_hull_pred:+.3f}" if r.e_above_hull_pred is not None else "--"
         rs = f"{r.predictor_residual:+.3f}" if r.predictor_residual is not None else "--"
+        sp = f"{r.ensemble_spread:.3f}" if r.ensemble_spread is not None else "--"
+        cf = r.ensemble_confidence or "--"
+        pf = f"{r.min_phonon_freq:+.2f}" if r.min_phonon_freq is not None else "--"
+        dyn = ("yes" if r.dynamically_stable else "no") if r.dynamically_stable is not None else "--"
         print(f"{r.id:>5}  {r.formula:<16}{r.e_above_hull_umlip:>+12.3f}{ep:>11}"
-              f"{rs:>8}{r.relax_rmsd:>7.2f}{r.relax_de:>+7.2f}  {r.verify_tier}")
+              f"{rs:>8}{sp:>8}{cf:>6}{pf:>8}{dyn:>5}  {r.verify_tier}")
     return 0
 
 
@@ -691,6 +703,21 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Only relax MP competitors within this DFT hull distance (eV/atom)")
     vc.add_argument("--relax-steps", type=int, default=500, help="Max relax steps per candidate")
     vc.add_argument("--competitor-relax-steps", type=int, default=200, help="Max relax steps per competitor")
+    vc.add_argument("--cross-backend", default="mattersim",
+                    help="2c ensemble cross-check uMLIP (independent member)")
+    vc.add_argument("--no-ensemble", action="store_true", help="Skip 2c ensemble cross-check")
+    vc.add_argument("--ensemble-spread-max", type=float, default=0.05,
+                    help="2c: high-confidence iff |e_hull spread| <= this (eV/atom)")
+    vc.add_argument("--no-phonons", action="store_true", help="Skip 2d phonon stability")
+    vc.add_argument("--phonon-e-hull-max", type=float, default=0.05,
+                    help="2d: run phonons only on candidates within this hull distance (eV/atom)")
+    vc.add_argument("--phonon-supercell-min-len", type=float, default=8.0,
+                    help="2d: target min supercell axis length (Angstrom)")
+    vc.add_argument("--phonon-displacement", type=float, default=0.03,
+                    help="2d: finite displacement (Angstrom)")
+    vc.add_argument("--phonon-mesh", type=int, default=8, help="2d: q-point mesh density (NxNxN)")
+    vc.add_argument("--phonon-tol", type=float, default=0.1,
+                    help="2d: imaginary-frequency tolerance (THz); stable iff min_freq >= -tol")
     vc.add_argument("--device", default=None, help="torch device (default: auto)")
     vc.set_defaults(func=_cmd_verify)
 
