@@ -337,6 +337,8 @@ def train(
     select_by: str | None = None,
     grad_clip: float = 5.0,
     restrict_labeled: bool = False,
+    feedback_root: str | None = None,
+    feedback_weight: int = 1,
     seed: int = 42,
 ):
     # Best-checkpoint selection metric. Default is stage-aware: stability AUC
@@ -432,10 +434,25 @@ def train(
         best_val = resume_state.get("best_val", float("inf"))
 
     dl_kw = dict(collate_fn=collate, num_workers=num_workers, persistent_workers=num_workers > 0)
+    # Active-learning feedback: mix Tier-2-verified records into the TRAIN split
+    # only (never val/test, so the AUC stays an honest DFT-held-out metric),
+    # replicated feedback_weight x to up-weight the scarce hard negatives.
+    train_subset = Subset(dataset, tr)
+    if feedback_root:
+        if distributed:
+            raise ValueError("feedback mixing is single-process; launch without torchrun")
+        from torch.utils.data import ConcatDataset
+
+        fb = ShardedCrystalDataset(feedback_root)
+        fb_idx = labeled_indices(fb, stage)
+        w = max(1, feedback_weight)
+        train_subset = ConcatDataset([train_subset] + [Subset(fb, fb_idx)] * w)
+        log(f"[train] feedback mix: +{len(fb_idx)} verified records x{w} "
+            f"(train {len(tr):,} -> {len(train_subset):,}); val/test unchanged")
     if distributed:
-        train_sampler = DistributedSampler(Subset(dataset, tr), shuffle=True, seed=seed)
+        train_sampler = DistributedSampler(train_subset, shuffle=True, seed=seed)
         train_loader = DataLoader(
-            Subset(dataset, tr), batch_size=batch_size, sampler=train_sampler, **dl_kw
+            train_subset, batch_size=batch_size, sampler=train_sampler, **dl_kw
         )
         val_loader = DataLoader(
             Subset(dataset, va),
@@ -445,7 +462,7 @@ def train(
         )
     else:
         train_sampler = None
-        train_loader = DataLoader(Subset(dataset, tr), batch_size=batch_size, shuffle=True, **dl_kw)
+        train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True, **dl_kw)
         val_loader = DataLoader(Subset(dataset, va), batch_size=batch_size, shuffle=False, **dl_kw)
 
     last_path = Path(out_dir) / f"predictor_stage{stage}_last.pt"

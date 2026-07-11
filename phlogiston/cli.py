@@ -136,6 +136,8 @@ def _cmd_train(args: argparse.Namespace) -> int:
         select_by=args.select_by,
         grad_clip=args.grad_clip,
         restrict_labeled=args.restrict_labeled,
+        feedback_root=args.feedback_root,
+        feedback_weight=args.feedback_weight,
     )
     return 0
 
@@ -208,6 +210,8 @@ def _cmd_fit_latent_head(args: argparse.Namespace) -> int:
         lr=args.lr,
         max_shards=args.max_shards,
         num_workers=args.num_workers,
+        feedback_root=args.feedback_root,
+        feedback_weight=args.feedback_weight,
     )
     torch.save({"model": head.state_dict(), "hidden": args.hidden, "latent_dim": gen.latent_dim},
                args.out)
@@ -224,6 +228,7 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         args.predictor,
         args.data_root,
         stability_ckpt=args.stability_ckpt,
+        stability_bias=args.stability_bias,
         synth_ckpt=args.synth_ckpt,
         synth_min=args.synth_min,
         latent_head_ckpt=args.latent_head,
@@ -303,6 +308,13 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         dyn = ("yes" if r.dynamically_stable else "no") if r.dynamically_stable is not None else "--"
         print(f"{r.id:>5}  {r.formula:<16}{r.e_above_hull_umlip:>+12.3f}{ep:>11}"
               f"{rs:>8}{sp:>8}{cf:>6}{pf:>8}{dyn:>5}  {r.verify_tier}")
+    return 0
+
+
+def _cmd_harvest_verified(args: argparse.Namespace) -> int:
+    from phlogiston.train import harvest_verified
+
+    harvest_verified(args.registry, args.out, cutoff=args.cutoff, dedup=not args.no_dedup)
     return 0
 
 
@@ -572,6 +584,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Train only on structures with a present label for the stage's "
         "targets (fast, dense signal for stage-2 property fine-tuning)",
     )
+    tr.add_argument(
+        "--feedback-root", default=None,
+        help="Active-learning: mix Tier-2-verified feedback shards (from "
+        "`harvest-verified`) into the train split only. Single-process.",
+    )
+    tr.add_argument(
+        "--feedback-weight", type=int, default=1,
+        help="Replicate the feedback set this many times to up-weight the "
+        "scarce hard negatives (e.g. 20-50 for ~100 records vs ~150k corpus)",
+    )
     tr.set_defaults(func=_cmd_train)
 
     ts = sub.add_parser("train-synth", help="Train the Tier-1 synthesizability classifier")
@@ -607,6 +629,22 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--max-shards", type=int, default=None)
     ev.add_argument("--num-workers", type=int, default=4)
     ev.set_defaults(func=_cmd_evaluate)
+
+    hv = sub.add_parser(
+        "harvest-verified",
+        help="Active-learning: build feedback shards from Tier-2 verified registries",
+    )
+    hv.add_argument(
+        "--registry", action="append", required=True,
+        help="Registry dir with a verified candidates.csv + relaxed/ (repeatable)",
+    )
+    hv.add_argument(
+        "--out", default="data/runs/feedback",
+        help="Feedback root: writes processed/shards + manifest.jsonl here",
+    )
+    hv.add_argument("--cutoff", type=float, default=6.0, help="Graph neighbor cutoff (A)")
+    hv.add_argument("--no-dedup", action="store_true", help="Skip StructureMatcher dedup")
+    hv.set_defaults(func=_cmd_harvest_verified)
 
     tc = sub.add_parser("train-cdvae", help="Train the CDVAE generator (EMA + composite loss)")
     tc.add_argument("--epochs", type=int, default=30)
@@ -648,6 +686,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--stability-ckpt",
         default=None,
         help="Separate stability specialist for the gate (recommended: Stage-1 best)",
+    )
+    dc.add_argument(
+        "--stability-bias",
+        type=float,
+        default=0.0,
+        help="Calibration offset (eV/atom) added to predicted energy_above_hull before "
+        "the gate. Set to the measured Tier-2 residual mean (~+0.25) to correct the "
+        "predictor's optimism so survivors actually land near the uMLIP hull.",
     )
     dc.add_argument("--n-samples", type=int, default=128)
     dc.add_argument("--steps-per-level", type=int, default=4)
@@ -729,6 +775,12 @@ def build_parser() -> argparse.ArgumentParser:
     fh.add_argument("--lr", type=float, default=1e-3)
     fh.add_argument("--max-shards", type=int, default=None)
     fh.add_argument("--num-workers", type=int, default=4)
+    fh.add_argument(
+        "--feedback-root", default=None,
+        help="Active-learning: mix Tier-2-verified feedback shards into the fit",
+    )
+    fh.add_argument("--feedback-weight", type=int, default=1,
+                    help="Replicate feedback this many times (up-weight hard negatives)")
     fh.set_defaults(func=_cmd_fit_latent_head)
 
     return p

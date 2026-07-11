@@ -88,6 +88,8 @@ def fit_latent_property_head(
     batch_size: int = 512,
     max_shards: int | None = None,
     num_workers: int = 4,
+    feedback_root: str | None = None,
+    feedback_weight: int = 1,
     seed: int = 42,
     verbose: bool = True,
 ) -> LatentPropertyHead:
@@ -95,8 +97,13 @@ def fit_latent_property_head(
 
     Encodes each labeled structure to its posterior-mean latent (deterministic),
     then fits the head with a masked MSE on standardized targets.
+
+    ``feedback_root`` (active-learning) mixes Tier-2-verified records into the
+    training encode set. They carry only stability labels, so the masked loss
+    lets them teach the head which latent regions decode to uMLIP-unstable
+    materials -- steering the conditioning optimizer away from them.
     """
-    from torch.utils.data import DataLoader, Subset
+    from torch.utils.data import ConcatDataset, DataLoader, Subset
 
     from phlogiston.data.dataset import ShardedCrystalDataset, collate
     from phlogiston.train.trainer import labeled_indices, split_indices
@@ -116,11 +123,19 @@ def fit_latent_property_head(
         if verbose:
             print(m, flush=True)
 
+    train_ds = Subset(ds, tr)
+    if feedback_root:
+        fb = ShardedCrystalDataset(feedback_root)
+        w = max(1, feedback_weight)
+        train_ds = ConcatDataset([train_ds] + [fb] * w)
+        log(f"[cond] feedback mix: +{len(fb)} verified records x{w} "
+            f"(train {len(tr):,} -> {len(train_ds):,})")
+
     log(f"[cond] fitting latent property head on {len(idx):,} labeled ({len(tr):,} train)")
 
     # 1) encode train latents + collect standardized-target stats
     loader_kw = dict(collate_fn=collate, num_workers=num_workers)
-    tr_loader = DataLoader(Subset(ds, tr), batch_size=batch_size, shuffle=False, **loader_kw)
+    tr_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=False, **loader_kw)
     zs, ys, ms = [], [], []
     for batch in tr_loader:
         batch = batch.to(device)

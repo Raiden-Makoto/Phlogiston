@@ -2,6 +2,7 @@
 
 from phlogiston.train.cdvae_trainer import train_cdvae
 from phlogiston.train.ema import EMA
+from phlogiston.train.feedback import harvest_verified
 from phlogiston.train.synth_trainer import evaluate_synth, train_synth
 from phlogiston.train.trainer import (
     compute_normalization,
@@ -21,4 +22,5 @@ __all__ = [
     "evaluate_checkpoint",
     "split_indices",
     "compute_normalization",
+    "harvest_verified",
 ]

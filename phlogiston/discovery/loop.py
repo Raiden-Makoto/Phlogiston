@@ -92,6 +92,7 @@ def discover(
     data_root: str = "data",
     *,
     stability_ckpt: str | None = None,
+    stability_bias: float = 0.0,
     synth_ckpt: str | None = None,
     synth_min: float = 0.3,
     latent_head_ckpt: str | None = None,
@@ -136,11 +137,15 @@ def discover(
     stability_model = load_predictor(stability_ckpt, device) if stability_ckpt else None
     if stability_model is not None:
         log("[discover] decoupled gate: stability from a separate specialist model")
+    if stability_bias:
+        log(f"[discover] recalibration: adding stability_bias={stability_bias:+.3f} eV/atom "
+            "to predicted energy_above_hull (measured uMLIP-vs-predictor optimism)")
     synth_model = load_synth_model(synth_ckpt, device) if synth_ckpt else None
     if synth_model is not None:
         log("[discover] Tier-1 synthesizability model loaded (learned synthesis prior)")
     screen = PropertyScreen(
-        predictor, stability_model=stability_model, synth_model=synth_model, device=device
+        predictor, stability_model=stability_model, synth_model=synth_model,
+        stability_bias=stability_bias, device=device,
     )
 
     if latent_head_ckpt is not None:

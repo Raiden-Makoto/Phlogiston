@@ -75,7 +75,8 @@ space (`phlogiston/models/cdvae/conditioning.py`):
    latents.
 2. `optimize_latent` gradient-ascends `z` toward a signed property profile
    (maximize the mechanical/thermal targets, minimize `energy_above_hull`).
-3. A **trust region** clips `‖z − z₀‖` to `--cond-trust-radius` (default 8) each
+3. A **trust region** clips `‖z − z₀‖` to `--cond-trust-radius` (default 4;
+   pass a different value to widen/tighten the on-manifold move) each
    step, keeping the latent on the learned manifold, and a **saturating
    (`tanh`) reward** caps each objective so the optimizer can't chase adversarial
    extrapolations of the head.

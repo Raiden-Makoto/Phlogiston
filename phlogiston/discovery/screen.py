@@ -76,12 +76,19 @@ class PropertyScreen:
         stability_model: Predictor | None = None,
         synth_model=None,
         cutoff: float = 6.0,
+        stability_bias: float = 0.0,
         device: str | None = None,
     ):
         self.model = predictor
         self.stability_model = stability_model
         self.synth_model = synth_model  # optional Tier-1 synthesizability classifier
         self.cutoff = cutoff
+        # Calibration offset (eV/atom) added to the predicted energy_above_hull.
+        # The Tier-2 uMLIP hull revealed the discovery predictor is a consistent
+        # optimist on the generator manifold (residual mean ~+0.25); adding that
+        # measured offset makes the reported hull distance -- and therefore the
+        # gate -- honest, so survivors actually land near the verified hull.
+        self.stability_bias = stability_bias
         self.device = device or next(predictor.parameters()).device
         self._stab_cols = [PREDICT_KEYS.index(k) for k in STABILITY_KEYS]
 
@@ -116,6 +123,8 @@ class PropertyScreen:
         results = []
         for i, s in enumerate(structs):
             props = {k: float(preds[i, j]) for j, k in enumerate(PREDICT_KEYS)}
+            if self.stability_bias:  # recalibrate the optimistic hull estimate
+                props["energy_above_hull"] += self.stability_bias
             props["density"] = float(s.density)  # analytic (g/cm^3)
             if synth is not None:
                 props["synthesizability"] = float(synth[i])
