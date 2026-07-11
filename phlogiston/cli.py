@@ -264,6 +264,36 @@ def _cmd_show_candidates(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_verify(args: argparse.Namespace) -> int:
+    from phlogiston.verify import verify_registry
+
+    report = verify_registry(
+        args.save_dir,
+        backend=args.backend,
+        top_k=args.top_k,
+        verify_e_hull_max=args.verify_e_hull_max,
+        ehull_cutoff=args.ehull_cutoff,
+        relax_steps=args.relax_steps,
+        competitor_relax_steps=args.competitor_relax_steps,
+        device=args.device,
+    )
+    if not report.rows:
+        print("[verify] no candidates verified.")
+        return 1
+    ranked = sorted(report.rows, key=lambda r: r.e_above_hull_umlip)
+    print(f"\nVerified {len(report.rows)} candidates (sorted by uMLIP hull distance):\n")
+    header = (f"{'id':>5}  {'formula':<16}{'Ehull_uMLIP':>12}{'Ehull_pred':>11}"
+              f"{'resid':>8}{'rmsd':>7}{'de':>7}  tier")
+    print(header)
+    print("-" * len(header))
+    for r in ranked:
+        ep = f"{r.e_above_hull_pred:+.3f}" if r.e_above_hull_pred is not None else "--"
+        rs = f"{r.predictor_residual:+.3f}" if r.predictor_residual is not None else "--"
+        print(f"{r.id:>5}  {r.formula:<16}{r.e_above_hull_umlip:>+12.3f}{ep:>11}"
+              f"{rs:>8}{r.relax_rmsd:>7.2f}{r.relax_de:>+7.2f}  {r.verify_tier}")
+    return 0
+
+
 def _cmd_evaluate(args: argparse.Namespace) -> int:
     from phlogiston.train import evaluate_checkpoint
 
@@ -649,6 +679,19 @@ def build_parser() -> argparse.ArgumentParser:
     scmd.add_argument("--save-dir", required=True, help="Directory holding candidates.csv")
     scmd.add_argument("--top-k", type=int, default=20, help="How many candidates to show")
     scmd.set_defaults(func=_cmd_show_candidates)
+
+    vc = sub.add_parser("verify", help="Tier-2: uMLIP relax + self-consistent hull over a registry")
+    vc.add_argument("--save-dir", required=True, help="Registry dir (candidates.csv + cifs/)")
+    vc.add_argument("--backend", default="chgnet", help="Primary uMLIP backend (chgnet | mattersim)")
+    vc.add_argument("--top-k", type=int, default=None, help="Verify only the top-N by score (default: all)")
+    vc.add_argument("--verify-e-hull-max", type=float, default=0.1,
+                    help="Tag as 'verified' iff e_above_hull_umlip <= this (eV/atom)")
+    vc.add_argument("--ehull-cutoff", type=float, default=0.05,
+                    help="Only relax MP competitors within this DFT hull distance (eV/atom)")
+    vc.add_argument("--relax-steps", type=int, default=500, help="Max relax steps per candidate")
+    vc.add_argument("--competitor-relax-steps", type=int, default=200, help="Max relax steps per competitor")
+    vc.add_argument("--device", default=None, help="torch device (default: auto)")
+    vc.set_defaults(func=_cmd_verify)
 
     fh = sub.add_parser("fit-latent-head", help="Fit f_p(z) on a CDVAE for conditioning")
     fh.add_argument("--generator", required=True, help="CDVAE checkpoint (.pt)")
