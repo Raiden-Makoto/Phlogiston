@@ -171,8 +171,8 @@ pip install -r requirements.txt   # includes e3nn + torch-geometric (not in pypr
 pip install -e .                  # installs the `phlogiston` CLI (Python >= 3.10)
 ```
 
-For AMD ROCm boxes, `docker/deploy_gbt.sh` syncs the repo to a GPU host and
-builds the ROCm image there (`sync` / `build` / `run` / `all`).
+For AMD ROCm boxes, build the image from the included `Dockerfile` (its base is
+a ROCm PyTorch image, so torch is not reinstalled from PyPI).
 
 ## Usage
 
@@ -277,5 +277,5 @@ phlogiston/
     rank.py                 # multi-objective score + Pareto front
 scripts/                    # cond_compare, sweep, validate_graph diagnostics
 tests/                      # layer / model / discovery unit tests
-docker/deploy_gbt.sh        # rsync + ROCm Docker build on a GPU box
+Dockerfile                  # ROCm PyTorch runtime image
 ```

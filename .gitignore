@@ -24,3 +24,6 @@ runs/
 # OS / editor
 .DS_Store
 .ipynb_checkpoints/
+
+# Private deploy tooling (points at a non-public GPU box; not for distribution)
+docker/deploy_*.sh

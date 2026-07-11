@@ -1,8 +1,8 @@
-# Phlogiston runtime image for the gbt350 box (8x AMD Instinct MI350X, gfx950).
+# Phlogiston runtime image for AMD Instinct GPUs (ROCm, gfx950 by default).
 #
 # Base is a ROCm PyTorch image that already ships a ROCm build of torch, so we
 # must NOT reinstall torch from PyPI (that would clobber the ROCm build with a
-# CPU/CUDA wheel). The default tag below is already cached on the gbt box:
+# CPU/CUDA wheel). Default base tag:
 #   rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.8.0
 ARG ROCM_PYTORCH_TAG=rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.8.0
 FROM ${ROCM_PYTORCH_TAG}

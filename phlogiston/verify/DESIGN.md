@@ -51,7 +51,7 @@ single model. Why uMLIP at all, then why an ensemble:
   trained on **`MPtrj`** — Materials Project relaxation trajectories — so their
   energies live in MP's frame and are directly hull-comparable.
 - **Runs on the hardware we have.** uMLIPs are PyTorch models → they run on the
-  gbt AMD MI350X (ROCm) GPUs, the same box as the rest of the pipeline.
+  AMD Instinct (ROCm) GPUs, the same hardware as the rest of the pipeline.
 - **Cost.** A relaxation is seconds and phonons minutes, so verifying the whole
   registry (and re-scoring with several potentials) is a routine batch, not a
   campaign.
@@ -109,7 +109,7 @@ driver, and membership is configurable.
 
 ```
 candidates.csv + CIFs  (from discovery)
-  └─ 2a  RELAX  (primary uMLIP, gbt GPU)
+  └─ 2a  RELAX  (primary uMLIP, ROCm GPU)
         • ASE relaxation (cell + positions) to local minimum
         • replace structure with relaxed; keep original CIF; record drift
         • total energy E_uMLIP
