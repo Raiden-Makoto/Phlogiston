@@ -84,15 +84,31 @@ def batched_sample(
     steps_per_level: int = 8,
     cutoff: float = 6.0,
     n_atoms: list[int] | None = None,
+    gen_batch_size: int | None = None,
 ):
     """Decode a batch of latents ``z`` [B, d] into pymatgen Structures via a
-    single batched annealed-Langevin trajectory on the GPU."""
+    single batched annealed-Langevin trajectory on the GPU.
+
+    ``gen_batch_size`` splits the decode into memory-safe chunks; use when B is
+    large and the e3nn tensor-product OOMs (typical on ROCm/HIP where
+    ``expandable_segments`` is unsupported).
+    """
     import numpy as np
     from pymatgen.core import Structure
 
     device = next(cdvae.parameters()).device
     z = z.to(device)
     b = z.shape[0]
+
+    if gen_batch_size is not None and gen_batch_size < b:
+        out = []
+        for start in range(0, b, gen_batch_size):
+            out.extend(batched_sample(
+                cdvae, z[start:start + gen_batch_size],
+                steps_per_level=steps_per_level, cutoff=cutoff,
+                n_atoms=n_atoms[start:start + gen_batch_size] if n_atoms is not None else None,
+            ))
+        return out
     pred = cdvae.predictors(z)
 
     # per-structure size, lattice matrix, and initial species (from composition)

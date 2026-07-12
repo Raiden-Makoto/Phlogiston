@@ -236,6 +236,7 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         cond_trust_radius=args.cond_trust_radius,
         n_samples=args.n_samples,
         steps_per_level=args.steps_per_level,
+        gen_batch_size=args.gen_batch_size,
         e_hull_max=args.e_hull_max,
         rho_max=args.rho_max,
         do_dedup=not args.no_dedup,
@@ -697,6 +698,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dc.add_argument("--n-samples", type=int, default=128)
     dc.add_argument("--steps-per-level", type=int, default=4)
+    dc.add_argument(
+        "--gen-batch-size", type=int, default=None,
+        help="Decode generation in chunks of this many structures to avoid GPU "
+        "OOM at large --n-samples (the e3nn tensor product scales with total "
+        "atoms in the batch). ~384 is safe on MI300; None = single batch.",
+    )
     dc.add_argument("--e-hull-max", type=float, default=0.1, help="Stability gate (eV/atom)")
     dc.add_argument("--rho-max", type=float, default=None, help="Density ceiling (g/cm^3)")
     dc.add_argument("--top-k", type=int, default=10)

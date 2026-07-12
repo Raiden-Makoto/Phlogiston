@@ -244,6 +244,7 @@ def generate_conditioned(
     trust_radius: float = 4.0,
     reward_cap: float = 2.0,
     steps_per_level: int = 4,
+    gen_batch_size: int | None = None,
     device: str | None = None,
 ) -> list:
     """Optimize latents toward the profile, then decode each into a Structure."""
@@ -255,4 +256,4 @@ def generate_conditioned(
         )
     from phlogiston.models.cdvae.sampler import batched_sample
 
-    return batched_sample(cdvae, Z, steps_per_level=steps_per_level)
+    return batched_sample(cdvae, Z, steps_per_level=steps_per_level, gen_batch_size=gen_batch_size)

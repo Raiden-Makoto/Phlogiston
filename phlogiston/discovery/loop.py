@@ -40,10 +40,18 @@ def load_generator(ckpt_path: str, device: str | None = None, use_ema: bool = Tr
 
 
 @torch.no_grad()
-def sample_candidates(generator: CDVAE, n: int, steps_per_level: int = 8) -> list:
-    """Draw ``n`` ab-initio structures via the batched GPU sampler."""
+def sample_candidates(
+    generator: CDVAE, n: int, steps_per_level: int = 8, gen_batch_size: int | None = None,
+) -> list:
+    """Draw ``n`` ab-initio structures via the batched GPU sampler.
+
+    ``gen_batch_size`` decodes in chunks to avoid OOM on large ``n`` (the e3nn
+    tensor product scales with total atoms across the batch).
+    """
     try:
-        return generator.sample_batch(n=n, steps_per_level=steps_per_level)
+        return generator.sample_batch(
+            n=n, steps_per_level=steps_per_level, gen_batch_size=gen_batch_size,
+        )
     except Exception:  # noqa: BLE001  fall back to per-structure sampling
         out = []
         for _ in range(n):
@@ -101,6 +109,7 @@ def discover(
     cond_trust_radius: float = 4.0,
     n_samples: int = 128,
     steps_per_level: int = 4,
+    gen_batch_size: int | None = None,
     e_hull_max: float = 0.1,
     rho_max: float | None = None,
     weights: dict[str, float] | None = None,
@@ -155,11 +164,12 @@ def discover(
         log(f"[discover] property-conditioned generation of {n_samples} candidates ...")
         structures = generate_conditioned(
             generator, head, n_samples, profile=profile, steps=cond_steps,
-            trust_radius=cond_trust_radius, steps_per_level=steps_per_level, device=device,
+            trust_radius=cond_trust_radius, steps_per_level=steps_per_level,
+            gen_batch_size=gen_batch_size, device=device,
         )
     else:
         log(f"[discover] sampling {n_samples} candidates (unconditional) ...")
-        structures = sample_candidates(generator, n_samples, steps_per_level)
+        structures = sample_candidates(generator, n_samples, steps_per_level, gen_batch_size)
     log(f"[discover] {len(structures)} valid structures generated")
     stats = stats_out if stats_out is not None else {}
     stats["generated"] = len(structures)
