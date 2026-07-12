@@ -268,6 +268,11 @@ def _write_back(df, report: VerifyReport, csv_path: Path) -> None:
     for col in VERIFY_COLUMNS:
         if col not in df.columns:
             df[col] = pd.Series([""] * len(df), index=df.index, dtype=object)
+        else:
+            # A prior verify pass may have written these columns all-empty,
+            # which pandas re-infers as float64 on re-read; force object so a
+            # later bool/str assignment does not trip pandas 2.x strict dtype.
+            df[col] = df[col].astype(object)
     by_id = {r.id: r for r in report.rows}
     for i, cid in df["id"].items():
         r = by_id.get(int(cid))
