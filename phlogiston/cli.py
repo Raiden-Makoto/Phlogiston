@@ -191,6 +191,30 @@ def _cmd_train_cdvae(args: argparse.Namespace) -> int:
         warmup_epochs=args.warmup_epochs,
         patience=args.patience,
         num_workers=args.num_workers,
+        distill_root=args.distill_root,
+        distill_weight=args.distill_weight,
+    )
+    return 0
+
+
+def _cmd_distill_corpus(args: argparse.Namespace) -> int:
+    from phlogiston.train.distill import build_distill_corpus
+
+    build_distill_corpus(
+        args.generator,
+        args.out_root,
+        n_samples=args.n_samples,
+        gen_batch_size=args.gen_batch_size,
+        steps_per_level=args.steps_per_level,
+        backend=args.backend,
+        relax_steps=args.relax_steps,
+        fmax=args.fmax,
+        keep_fmax=args.keep_fmax,
+        require_energy_drop=not args.keep_energy_increase,
+        shard_size=args.shard_size,
+        shard_start=args.shard_start,
+        tag=args.tag,
+        seed=args.seed,
     )
     return 0
 
@@ -690,7 +714,39 @@ def build_parser() -> argparse.ArgumentParser:
     tc.add_argument("--warmup-epochs", type=int, default=2)
     tc.add_argument("--patience", type=int, default=8)
     tc.add_argument("--num-workers", type=int, default=4)
+    tc.add_argument(
+        "--distill-root", default=None,
+        help="Relaxation self-distillation corpus (shards of uMLIP-relaxed generated "
+        "structures, from `distill-corpus`); mixed into the train split, up-weighted.",
+    )
+    tc.add_argument(
+        "--distill-weight", type=int, default=1,
+        help="Replicate the distill corpus this many times in the train split (up-weight)",
+    )
     tc.set_defaults(func=_cmd_train_cdvae)
+
+    dcorp = sub.add_parser(
+        "distill-corpus",
+        help="Generate + uMLIP-relax structures into graph shards (CDVAE self-distillation)",
+    )
+    dcorp.add_argument("--generator", required=True, help="CDVAE checkpoint (.pt) to sample from")
+    dcorp.add_argument("--out-root", required=True, help="Corpus root (writes processed/shards/)")
+    dcorp.add_argument("--n-samples", type=int, default=2000)
+    dcorp.add_argument("--gen-batch-size", type=int, default=384, help="Chunk decode to avoid OOM")
+    dcorp.add_argument("--steps-per-level", type=int, default=8)
+    dcorp.add_argument("--backend", default="chgnet", help="uMLIP backend (chgnet | mattersim)")
+    dcorp.add_argument("--relax-steps", type=int, default=150, help="Max uMLIP relax steps per structure")
+    dcorp.add_argument("--fmax", type=float, default=0.05, help="Relax force-convergence target (eV/A)")
+    dcorp.add_argument("--keep-fmax", type=float, default=0.2,
+                       help="Keep a relaxed structure only if its max force <= this (eV/A)")
+    dcorp.add_argument("--keep-energy-increase", action="store_true",
+                       help="Keep structures whose energy did not drop on relaxation (default: drop them)")
+    dcorp.add_argument("--shard-size", type=int, default=2000, help="Records per shard file")
+    dcorp.add_argument("--shard-start", type=int, default=0,
+                       help="First shard index (offset so parallel workers don't collide)")
+    dcorp.add_argument("--tag", default="0", help="Record id prefix (unique per parallel worker)")
+    dcorp.add_argument("--seed", type=int, default=0)
+    dcorp.set_defaults(func=_cmd_distill_corpus)
 
     dc = sub.add_parser("discover", help="Generate -> screen -> rank novel stable candidates")
     dc.add_argument("--generator", required=True, help="CDVAE checkpoint (.pt)")

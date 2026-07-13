@@ -114,6 +114,8 @@ def train_cdvae(
     warmup_epochs: int = 2,
     patience: int = 8,
     num_workers: int = 4,
+    distill_root: str | None = None,
+    distill_weight: int = 1,
     seed: int = 42,
 ):
     if num_workers > 0:
@@ -180,19 +182,32 @@ def train_cdvae(
         start_epoch = resume_state["epoch"] + 1
         best_val = resume_state.get("best_val", float("inf"))
 
+    train_subset = Subset(dataset, tr)
+    # Relaxation self-distillation: mix the corpus of uMLIP-relaxed generated
+    # structures into the TRAIN split only (never val), replicated to up-weight
+    # the scarce corpus vs. the large original set. Single-process only.
+    if distill_root:
+        if distributed:
+            raise ValueError("distill mixing is single-process; launch without torchrun")
+        from torch.utils.data import ConcatDataset
+
+        corpus = ShardedCrystalDataset(distill_root)
+        w = max(1, distill_weight)
+        train_subset = ConcatDataset([train_subset] + [corpus] * w)
+        log(f"[cdvae] distill mix: +{len(corpus):,} relaxed-generated records x{w} "
+            f"-> train {len(train_subset):,}")
+
     dl_kw = dict(collate_fn=collate, num_workers=num_workers, persistent_workers=num_workers > 0)
     if distributed:
-        train_sampler = DistributedSampler(Subset(dataset, tr), shuffle=True, seed=seed)
-        train_loader = DataLoader(
-            Subset(dataset, tr), batch_size=batch_size, sampler=train_sampler, **dl_kw
-        )
+        train_sampler = DistributedSampler(train_subset, shuffle=True, seed=seed)
+        train_loader = DataLoader(train_subset, batch_size=batch_size, sampler=train_sampler, **dl_kw)
         val_loader = DataLoader(
             Subset(dataset, va), batch_size=batch_size,
             sampler=DistributedSampler(Subset(dataset, va), shuffle=False), **dl_kw,
         )
     else:
         train_sampler = None
-        train_loader = DataLoader(Subset(dataset, tr), batch_size=batch_size, shuffle=True, **dl_kw)
+        train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True, **dl_kw)
         val_loader = DataLoader(Subset(dataset, va), batch_size=batch_size, shuffle=False, **dl_kw)
 
     last_path = Path(out_dir) / "cdvae_last.pt"
