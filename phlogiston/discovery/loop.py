@@ -134,6 +134,7 @@ def discover(
     umlip_phonons: bool = False,
     umlip_require_phonon_stable: bool = True,
     umlip_phonon_e_hull_max: float = 0.05,
+    umlip_failure_cap: int = 1000,
     api_key: str | None = None,
     device: str | None = None,
     verbose: bool = True,
@@ -238,7 +239,7 @@ def discover(
         from phlogiston.discovery.umlip_gate import umlip_relax_gate
 
         cache_dir = f"{save_dir}/verify_cache" if save_dir else None
-        scored, _ = umlip_relax_gate(
+        scored, umlip_stats = umlip_relax_gate(
             scored,
             backend=umlip_backend,
             e_hull_max=umlip_e_hull_max,
@@ -259,6 +260,8 @@ def discover(
         )
         log(f"[discover] {len(scored)} pass Tier-1.5 uMLIP stability gate (e_hull_umlip<={umlip_e_hull_max})")
         stats["Tier-1.5"] = len(scored)
+        if save_dir and umlip_failure_cap and umlip_stats.failures:  # accumulate "don't do this" negatives
+            save_failures(umlip_stats.failures, save_dir, cap=umlip_failure_cap, verbose=verbose)
 
     ranked = rank_candidates(scored, rho_max=rho_max, e_hull_max=e_hull_max, weights=weights)
     log(f"[discover] {len(ranked)} candidates pass stability gate (e_hull<={e_hull_max})")
@@ -365,6 +368,92 @@ def save_candidates(candidates, save_dir: str, *, run_id: str | None = None,
     if verbose:
         print(f"[discover] saved {added} new candidates -> {csv_path} ({next_id} total in registry)",
               flush=True)
+    return added
+
+
+# Persisted columns for the failure registry (the "don't do this" negatives).
+_FAILURE_COLUMNS = [
+    "id", "formula", "failure_reason", "run_id", "timestamp",
+    "energy_above_hull_pred", "e_above_hull_umlip", "formation_energy_umlip",
+    "relax_rmsd", "relax_de", "relax_dvol", "relax_converged",
+    "e_above_hull_umlip_secondary", "ensemble_spread", "ensemble_confidence",
+    "min_phonon_freq", "dynamically_stable",
+]
+
+
+def save_failures(records, save_dir: str, *, cap: int = 1000,
+                  run_id: str | None = None, verbose: bool = True) -> int:
+    """Persist gate-dropped candidates as a labeled negative dataset under
+    ``save_dir/failures/`` (CIF + accumulating ``failures.csv``), stopping once
+    the set reaches ``cap`` structures.
+
+    These are physically-evaluated "don't do this" examples: off-manifold
+    (drift), thermodynamically unstable (hull_screened, with a real uMLIP
+    e_above_hull), or dynamically unstable (phonon_unstable). Kept to retrain the
+    generator / a discriminator away from the failure modes the predictor missed.
+    """
+    import csv
+    import time
+    from pathlib import Path
+
+    save = Path(save_dir) / "failures"
+    csv_path = save / "failures.csv"
+    run_id = run_id or time.strftime("%Y%m%d-%H%M%S")
+
+    existing, next_id = 0, 0
+    if csv_path.exists():
+        import pandas as pd
+
+        prev = pd.read_csv(csv_path)
+        existing = len(prev)
+        next_id = int(prev["id"].max()) + 1 if len(prev) else 0
+    if existing >= cap:
+        if verbose:
+            print(f"[discover] failure set already at cap ({existing} >= {cap}); not persisting more",
+                  flush=True)
+        return 0
+
+    cifs = save / "cifs"
+    cifs.mkdir(parents=True, exist_ok=True)
+    room = cap - existing
+    write_header = not csv_path.exists()
+    added = 0
+    with open(csv_path, "a", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=_FAILURE_COLUMNS)
+        if write_header:
+            w.writeheader()
+        for rec in records:
+            if added >= room:
+                break
+            cid = next_id
+            next_id += 1
+            fname = f"{cid:05d}_{rec['formula']}.cif".replace("/", "_")
+            try:
+                rec["structure"].to(filename=str(cifs / fname), fmt="cif")
+            except Exception:  # noqa: BLE001  skip CIFs pymatgen can't serialize
+                pass
+            p = rec["properties"]
+            row = {
+                "id": cid, "formula": rec["formula"],
+                "failure_reason": rec["failure_reason"], "run_id": run_id,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+            for k in _FAILURE_COLUMNS[5:]:
+                v = p.get(k)
+                if v is None or v == "":
+                    row[k] = ""
+                elif isinstance(v, (bool, str)):
+                    row[k] = v
+                else:
+                    try:
+                        row[k] = round(float(v), 4)
+                    except (TypeError, ValueError):
+                        row[k] = v
+            w.writerow(row)
+            added += 1
+    if verbose:
+        print(f"[discover] persisted {added} failures -> {csv_path} "
+              f"({existing + added}/{cap} in the 'don't do this' set)", flush=True)
     return added
 
 

@@ -42,6 +42,7 @@ class UmlipGateStats:
     phonon_unstable: int = 0     # confirmed imaginary modes (dropped if required)
     passed: int = 0              # survived the full in-loop gate
     residuals: list = field(default_factory=list)  # umlip - predicted, eV/atom
+    failures: list = field(default_factory=list)   # dropped negatives (the "don't do this" set)
 
 
 def umlip_relax_gate(
@@ -131,12 +132,24 @@ def umlip_relax_gate(
     log(f"[umlip-gate] relaxing {len(targets)} candidates "
         f"({mode}{(', ' + ', '.join(extras)) if extras else ''}, gate e_hull<={e_hull_max}) ...")
 
+    def record_failure(cand, reason: str) -> None:
+        """Stash a dropped candidate as a labeled negative for the 'don't do this'
+        dataset. ``cand.structure`` is the relaxed cell (canonical) except on a
+        relax failure, where it is the as-generated cell."""
+        stats.failures.append({
+            "structure": cand.structure,
+            "formula": cand.formula,
+            "failure_reason": reason,
+            "properties": dict(cand.properties),
+        })
+
     survivors: list = []
     for c in targets:
         try:
             rr = relax_structure(c.structure, calc, steps=relax_steps, relax_cell=relax_cell)
         except Exception as exc:  # noqa: BLE001  one bad cell shouldn't abort the batch
             stats.relax_failed += 1
+            record_failure(c, "relax_failed")
             log(f"[umlip-gate] {c.formula:<16} relax FAILED ({exc})")
             continue
         stats.relaxed += 1
@@ -156,6 +169,7 @@ def umlip_relax_gate(
             or (max_dvol is not None and rr.dvol_frac > max_dvol)
         if drift_bad:
             stats.drift_rejected += 1
+            record_failure(c, "drift")
             continue
 
         if not with_hull:
@@ -174,6 +188,7 @@ def umlip_relax_gate(
             hull = refined_hull_distance(rr.structure, rr.energy, competitors)
         except Exception as exc:  # noqa: BLE001  MP/hull failure -> drop (can't verify)
             stats.hull_failed += 1
+            record_failure(c, "hull_failed")
             log(f"[umlip-gate] {c.formula:<16} hull FAILED ({exc}) -> dropped")
             continue
 
@@ -188,6 +203,7 @@ def umlip_relax_gate(
 
         if e_umlip > e_hull_max:
             stats.hull_screened += 1
+            record_failure(c, "hull_screened")
             log(f"[umlip-gate] {c.formula:<16} e_hull_umlip={e_umlip:+.3f} "
                 f"(pred {('%+.3f' % e_pred) if e_pred is not None else '  --'})  "
                 f"rmsd={rr.rmsd:.2f} de={rr.de:+.2f}  [screened]  ({hull.n_competitors} competitors)")
@@ -232,6 +248,7 @@ def umlip_relax_gate(
                 if not ph.dynamically_stable:
                     stats.phonon_unstable += 1
                     if require_phonon_stable:
+                        record_failure(c, "phonon_unstable")
                         continue  # dynamically unstable -> drop from the queue
             except Exception as exc:  # noqa: BLE001  phonon failure keeps the candidate (unchecked)
                 log(f"[umlip-gate]     2d phonons failed: {exc}")
