@@ -121,6 +121,15 @@ def discover(
     max_elements: int = 5,
     max_reduced_atoms: int = 40,
     allow_radioactive: bool = False,
+    umlip_gate: bool = False,
+    umlip_backend: str = "chgnet",
+    umlip_e_hull_max: float = 0.1,
+    umlip_relax_steps: int = 300,
+    umlip_with_hull: bool = True,
+    umlip_max_candidates: int | None = None,
+    umlip_max_rmsd: float | None = None,
+    umlip_ehull_cutoff: float = 0.05,
+    api_key: str | None = None,
     device: str | None = None,
     verbose: bool = True,
 ):
@@ -219,6 +228,27 @@ def discover(
         scored = [c for c in scored if c.properties.get("synthesizability", 0.0) >= synth_min]
         log(f"[discover] {len(scored)} pass Tier-1 synthesizability >= {synth_min} ({before - len(scored)} rejected)")
         stats["Tier-1"] = len(scored)
+
+    if umlip_gate:  # Tier-1.5: physical uMLIP relax + hull (closes the predictor blind spot)
+        from phlogiston.discovery.umlip_gate import umlip_relax_gate
+
+        cache_dir = f"{save_dir}/verify_cache" if save_dir else None
+        scored, _ = umlip_relax_gate(
+            scored,
+            backend=umlip_backend,
+            e_hull_max=umlip_e_hull_max,
+            relax_steps=umlip_relax_steps,
+            with_hull=umlip_with_hull,
+            max_candidates=umlip_max_candidates,
+            max_rmsd=umlip_max_rmsd,
+            ehull_cutoff=umlip_ehull_cutoff,
+            cache_dir=cache_dir,
+            device=device,
+            api_key=api_key,
+            verbose=verbose,
+        )
+        log(f"[discover] {len(scored)} pass Tier-1.5 uMLIP stability gate (e_hull_umlip<={umlip_e_hull_max})")
+        stats["Tier-1.5"] = len(scored)
 
     ranked = rank_candidates(scored, rho_max=rho_max, e_hull_max=e_hull_max, weights=weights)
     log(f"[discover] {len(ranked)} candidates pass stability gate (e_hull<={e_hull_max})")

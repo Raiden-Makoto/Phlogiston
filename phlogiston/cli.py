@@ -246,6 +246,14 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         max_elements=args.max_elements,
         max_reduced_atoms=args.max_reduced_atoms,
         allow_radioactive=args.allow_radioactive,
+        umlip_gate=args.umlip_gate,
+        umlip_backend=args.umlip_backend,
+        umlip_e_hull_max=args.umlip_e_hull_max,
+        umlip_relax_steps=args.umlip_relax_steps,
+        umlip_with_hull=not args.umlip_no_hull,
+        umlip_max_candidates=args.umlip_max_candidates,
+        umlip_max_rmsd=args.umlip_max_rmsd,
+        umlip_ehull_cutoff=args.umlip_ehull_cutoff,
         stats_out=stats,
     )
     print("\n" + format_report(ranked, top_k=args.top_k, stats=stats))
@@ -726,6 +734,26 @@ def build_parser() -> argparse.ArgumentParser:
     dc.add_argument("--max-elements", type=int, default=5, help="Tier-0: max distinct elements")
     dc.add_argument("--max-reduced-atoms", type=int, default=40, help="Tier-0: max atoms in reduced formula")
     dc.add_argument("--allow-radioactive", action="store_true", help="Tier-0: permit radioactive elements")
+    dc.add_argument(
+        "--umlip-gate", action="store_true",
+        help="Tier-1.5: relax survivors with a uMLIP and gate on the self-consistent "
+        "uMLIP hull distance. Closes the predictor's off-manifold blind spot so the "
+        "saved candidates are already physically verified (relax+hull).",
+    )
+    dc.add_argument("--umlip-backend", default="chgnet", help="Tier-1.5 uMLIP backend (chgnet | mattersim)")
+    dc.add_argument("--umlip-e-hull-max", type=float, default=0.1,
+                    help="Tier-1.5 gate: keep iff e_above_hull_umlip <= this (eV/atom)")
+    dc.add_argument("--umlip-relax-steps", type=int, default=300, help="Tier-1.5: max relax steps per candidate")
+    dc.add_argument("--umlip-no-hull", action="store_true",
+                    help="Tier-1.5: fast relax+drift-only pass (no Materials Project hull round-trip)")
+    dc.add_argument("--umlip-max-candidates", type=int, default=None,
+                    help="Tier-1.5: relax at most the top-N survivors by predicted hull distance "
+                    "(bounds cost; default: all)")
+    dc.add_argument("--umlip-max-rmsd", type=float, default=None,
+                    help="Tier-1.5 drift prefilter: drop candidates whose relaxation RMSD exceeds "
+                    "this (Angstrom); large drift => off-manifold generator guess")
+    dc.add_argument("--umlip-ehull-cutoff", type=float, default=0.05,
+                    help="Tier-1.5: only relax MP competitors within this DFT hull distance (eV/atom)")
     dc.add_argument(
         "--latent-head",
         default=None,
