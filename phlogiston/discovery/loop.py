@@ -134,7 +134,7 @@ def discover(
     umlip_phonons: bool = False,
     umlip_require_phonon_stable: bool = True,
     umlip_phonon_e_hull_max: float = 0.05,
-    umlip_failure_cap: int = 1000,
+    umlip_failure_cap: int = 400,
     api_key: str | None = None,
     device: str | None = None,
     verbose: bool = True,
@@ -381,7 +381,7 @@ _FAILURE_COLUMNS = [
 ]
 
 
-def save_failures(records, save_dir: str, *, cap: int = 1000,
+def save_failures(records, save_dir: str, *, cap: int = 400,
                   run_id: str | None = None, verbose: bool = True) -> int:
     """Persist gate-dropped candidates as a labeled negative dataset under
     ``save_dir/failures/`` (CIF + accumulating ``failures.csv``), stopping once

@@ -772,7 +772,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Tier-1.5 (2d): annotate phonon stability but do NOT drop unstable candidates")
     dc.add_argument("--umlip-phonon-e-hull-max", type=float, default=0.05,
                     help="Tier-1.5 (2d): run phonons only on candidates within this hull distance (eV/atom)")
-    dc.add_argument("--umlip-failure-cap", type=int, default=1000,
+    dc.add_argument("--umlip-failure-cap", type=int, default=400,
                     help="Persist gate-dropped candidates as a labeled 'don't do this' negative set "
                     "under <save-dir>/failures/ until it reaches this many structures (0 = disable)")
     dc.add_argument(
