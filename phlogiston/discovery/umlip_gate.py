@@ -35,7 +35,12 @@ class UmlipGateStats:
     relax_failed: int = 0
     drift_rejected: int = 0      # off-manifold (non-converged / excessive drift)
     hull_failed: int = 0         # MP/hull error (kept or dropped per policy)
-    passed: int = 0              # survived the uMLIP stability gate
+    hull_screened: int = 0       # relaxed + hulled but above the stability gate
+    ensemble_checked: int = 0    # ran 2c cross-check
+    ensemble_low_conf: int = 0   # members disagreed (off-distribution)
+    phonon_checked: int = 0      # ran 2d phonons
+    phonon_unstable: int = 0     # confirmed imaginary modes (dropped if required)
+    passed: int = 0              # survived the full in-loop gate
     residuals: list = field(default_factory=list)  # umlip - predicted, eV/atom
 
 
@@ -52,6 +57,15 @@ def umlip_relax_gate(
     max_dvol: float | None = None,
     ehull_cutoff: float = 0.05,
     competitor_relax_steps: int = 200,
+    cross_backend: str | None = None,
+    ensemble_spread_max: float = 0.05,
+    do_phonons: bool = False,
+    require_phonon_stable: bool = True,
+    phonon_e_hull_max: float = 0.05,
+    phonon_supercell_min_len: float = 8.0,
+    phonon_displacement: float = 0.03,
+    phonon_mesh: int = 8,
+    phonon_tol: float = 0.1,
     cache_dir: str | None = None,
     device: str | None = None,
     api_key: str | None = None,
@@ -67,8 +81,18 @@ def umlip_relax_gate(
     candidates by predicted hull distance. ``with_hull=False`` runs a fast
     relax+drift-only pass (no Materials Project round-trip): it cannot compute a
     true hull distance, so it gates purely on convergence + drift.
+
+    On the candidates that clear the hull gate, two further in-loop checks run
+    (mirroring Tier-2 post-processing, so the saved queue is fully verified):
+    ``cross_backend`` (2c) re-relaxes with a second, independent uMLIP and flags
+    members' disagreement; ``do_phonons`` (2d) runs finite-displacement phonons
+    on near-hull survivors and -- when ``require_phonon_stable`` -- drops any with
+    confirmed imaginary modes (a phonon *calc failure* keeps the candidate,
+    annotated as unchecked).
     """
+    from phlogiston.verify.ensemble import ensemble_cross_check
     from phlogiston.verify.hull import CompetitorCache, build_competitor_entries, refined_hull_distance
+    from phlogiston.verify.phonons import phonon_stability
     from phlogiston.verify.potential import load_calculator
     from phlogiston.verify.relax import relax_structure
 
@@ -91,11 +115,21 @@ def umlip_relax_gate(
     log(f"[umlip-gate] loading {backend} calculator on {device or 'auto'} ...")
     calc = load_calculator(backend, device=device)
     cache = None
+    calc2 = cache2 = None
     if with_hull:
-        cache_path = Path(cache_dir or "umlip_gate_cache") / f"umlip_{backend}.json"
-        cache = CompetitorCache(cache_path)
+        base = Path(cache_dir or "umlip_gate_cache")
+        cache = CompetitorCache(base / f"umlip_{backend}.json")
+        if cross_backend:
+            calc2 = load_calculator(cross_backend, device=device)
+            cache2 = CompetitorCache(base / f"umlip_{cross_backend}.json")
+    extras = []
+    if with_hull and cross_backend:
+        extras.append(f"2c={cross_backend}")
+    if with_hull and do_phonons:
+        extras.append("2d=phonons")
+    mode = "relax+hull" if with_hull else "relax+drift only"
     log(f"[umlip-gate] relaxing {len(targets)} candidates "
-        f"({'relax+hull' if with_hull else 'relax+drift only'}, gate e_hull<={e_hull_max}) ...")
+        f"({mode}{(', ' + ', '.join(extras)) if extras else ''}, gate e_hull<={e_hull_max}) ...")
 
     survivors: list = []
     for c in targets:
@@ -152,14 +186,58 @@ def umlip_relax_gate(
         c.properties["e_above_hull_umlip"] = round(e_umlip, 4)
         c.properties["formation_energy_umlip"] = round(hull.formation_energy_umlip, 4)
 
-        keep = e_umlip <= e_hull_max
+        if e_umlip > e_hull_max:
+            stats.hull_screened += 1
+            log(f"[umlip-gate] {c.formula:<16} e_hull_umlip={e_umlip:+.3f} "
+                f"(pred {('%+.3f' % e_pred) if e_pred is not None else '  --'})  "
+                f"rmsd={rr.rmsd:.2f} de={rr.de:+.2f}  [screened]  ({hull.n_competitors} competitors)")
+            continue
         log(f"[umlip-gate] {c.formula:<16} e_hull_umlip={e_umlip:+.3f} "
             f"(pred {('%+.3f' % e_pred) if e_pred is not None else '  --'})  "
-            f"rmsd={rr.rmsd:.2f} de={rr.de:+.2f}  "
-            f"[{'PASS' if keep else 'screened'}]  ({hull.n_competitors} competitors)")
-        if keep:
-            survivors.append(c)
-            stats.passed += 1
+            f"rmsd={rr.rmsd:.2f} de={rr.de:+.2f}  [hull PASS]  ({hull.n_competitors} competitors)")
+
+        # 2c ensemble cross-check on the hull-passers.
+        if calc2 is not None:
+            try:
+                ens = ensemble_cross_check(
+                    rr.structure, e_umlip, calc2, cache2, cross_backend,
+                    spread_max=ensemble_spread_max, relax_steps=relax_steps,
+                    competitor_relax_steps=competitor_relax_steps, ehull_cutoff=ehull_cutoff,
+                    api_key=api_key, verbose=False,
+                )
+                stats.ensemble_checked += 1
+                if ens.confidence == "low":
+                    stats.ensemble_low_conf += 1
+                c.properties["e_above_hull_umlip_secondary"] = round(ens.e_above_hull_secondary, 4)
+                c.properties["ensemble_spread"] = round(ens.spread, 4)
+                c.properties["ensemble_confidence"] = ens.confidence
+                log(f"[umlip-gate]     2c {cross_backend}: e_hull={ens.e_above_hull_secondary:+.3f} "
+                    f"spread={ens.spread:.3f} -> {ens.confidence}-confidence")
+            except Exception as exc:  # noqa: BLE001  cross-check failure is non-fatal
+                log(f"[umlip-gate]     2c cross-check failed: {exc}")
+
+        # 2d phonons on near-hull survivors; drop confirmed-imaginary if required.
+        if do_phonons and e_umlip <= phonon_e_hull_max:
+            try:
+                ph = phonon_stability(
+                    rr.structure, calc,
+                    supercell_min_len=phonon_supercell_min_len,
+                    displacement=phonon_displacement, mesh=phonon_mesh, tol_thz=phonon_tol,
+                )
+                stats.phonon_checked += 1
+                c.properties["min_phonon_freq"] = round(ph.min_freq_thz, 4)
+                c.properties["dynamically_stable"] = bool(ph.dynamically_stable)
+                log(f"[umlip-gate]     2d phonons: min_freq={ph.min_freq_thz:+.2f} THz "
+                    f"({'stable' if ph.dynamically_stable else 'IMAGINARY'})")
+                if not ph.dynamically_stable:
+                    stats.phonon_unstable += 1
+                    if require_phonon_stable:
+                        continue  # dynamically unstable -> drop from the queue
+            except Exception as exc:  # noqa: BLE001  phonon failure keeps the candidate (unchecked)
+                log(f"[umlip-gate]     2d phonons failed: {exc}")
+
+        survivors.append(c)
+        stats.passed += 1
 
     if stats.residuals:
         import statistics
@@ -168,7 +246,12 @@ def umlip_relax_gate(
         log(f"[umlip-gate] predictor residual (umlip - pred): n={len(stats.residuals)} "
             f"mean={mean:+.4f} median={med:+.4f} eV/atom "
             f"(positive => predictor optimistic; use as --stability-bias)")
+    extra = ""
+    if stats.phonon_checked:
+        extra += f", {stats.phonon_unstable}/{stats.phonon_checked} phonon-unstable"
+    if stats.ensemble_checked:
+        extra += f", {stats.ensemble_low_conf}/{stats.ensemble_checked} low-confidence"
     log(f"[umlip-gate] {stats.passed}/{stats.considered} passed "
-        f"({stats.drift_rejected} drift-rejected, {stats.relax_failed} relax-failed, "
-        f"{stats.hull_failed} hull-failed)")
+        f"({stats.hull_screened} hull-screened, {stats.drift_rejected} drift-rejected, "
+        f"{stats.relax_failed} relax-failed, {stats.hull_failed} hull-failed{extra})")
     return survivors, stats

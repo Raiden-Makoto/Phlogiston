@@ -254,6 +254,11 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         umlip_max_candidates=args.umlip_max_candidates,
         umlip_max_rmsd=args.umlip_max_rmsd,
         umlip_ehull_cutoff=args.umlip_ehull_cutoff,
+        umlip_cross_backend=args.umlip_cross_backend,
+        umlip_ensemble_spread_max=args.umlip_ensemble_spread_max,
+        umlip_phonons=args.umlip_phonons,
+        umlip_require_phonon_stable=not args.umlip_keep_phonon_unstable,
+        umlip_phonon_e_hull_max=args.umlip_phonon_e_hull_max,
         stats_out=stats,
     )
     print("\n" + format_report(ranked, top_k=args.top_k, stats=stats))
@@ -754,6 +759,18 @@ def build_parser() -> argparse.ArgumentParser:
                     "this (Angstrom); large drift => off-manifold generator guess")
     dc.add_argument("--umlip-ehull-cutoff", type=float, default=0.05,
                     help="Tier-1.5: only relax MP competitors within this DFT hull distance (eV/atom)")
+    dc.add_argument("--umlip-cross-backend", default=None,
+                    help="Tier-1.5 (2c): second, independent uMLIP (e.g. mattersim) that re-relaxes "
+                    "hull-passers and flags member disagreement (off-distribution). None = skip 2c.")
+    dc.add_argument("--umlip-ensemble-spread-max", type=float, default=0.05,
+                    help="Tier-1.5 (2c): high-confidence iff |e_hull spread| <= this (eV/atom)")
+    dc.add_argument("--umlip-phonons", action="store_true",
+                    help="Tier-1.5 (2d): run finite-displacement phonons on near-hull survivors and "
+                    "drop candidates with confirmed imaginary modes (dynamically unstable)")
+    dc.add_argument("--umlip-keep-phonon-unstable", action="store_true",
+                    help="Tier-1.5 (2d): annotate phonon stability but do NOT drop unstable candidates")
+    dc.add_argument("--umlip-phonon-e-hull-max", type=float, default=0.05,
+                    help="Tier-1.5 (2d): run phonons only on candidates within this hull distance (eV/atom)")
     dc.add_argument(
         "--latent-head",
         default=None,

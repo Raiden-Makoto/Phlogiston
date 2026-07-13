@@ -129,6 +129,11 @@ def discover(
     umlip_max_candidates: int | None = None,
     umlip_max_rmsd: float | None = None,
     umlip_ehull_cutoff: float = 0.05,
+    umlip_cross_backend: str | None = None,
+    umlip_ensemble_spread_max: float = 0.05,
+    umlip_phonons: bool = False,
+    umlip_require_phonon_stable: bool = True,
+    umlip_phonon_e_hull_max: float = 0.05,
     api_key: str | None = None,
     device: str | None = None,
     verbose: bool = True,
@@ -242,6 +247,11 @@ def discover(
             max_candidates=umlip_max_candidates,
             max_rmsd=umlip_max_rmsd,
             ehull_cutoff=umlip_ehull_cutoff,
+            cross_backend=umlip_cross_backend,
+            ensemble_spread_max=umlip_ensemble_spread_max,
+            do_phonons=umlip_phonons,
+            require_phonon_stable=umlip_require_phonon_stable,
+            phonon_e_hull_max=umlip_phonon_e_hull_max,
             cache_dir=cache_dir,
             device=device,
             api_key=api_key,
@@ -258,13 +268,21 @@ def discover(
     return ranked
 
 
-# Persisted columns for the candidate registry (fixed order).
+# Persisted columns for the candidate registry (fixed order). The uMLIP block is
+# populated only when --umlip-gate ran (in-loop verification); empty otherwise.
+_UMLIP_COLUMNS = [
+    "energy_above_hull_pred", "e_above_hull_umlip", "formation_energy_umlip",
+    "relax_rmsd", "relax_de", "relax_dvol", "relax_converged",
+    "e_above_hull_umlip_secondary", "ensemble_spread", "ensemble_confidence",
+    "min_phonon_freq", "dynamically_stable",
+]
 _CANDIDATE_COLUMNS = [
     "id", "formula", "run_id", "timestamp", "score", "is_pareto",
     "feasibility", "synthesizability", "energy_above_hull", "density",
     "bulk_modulus_vrh", "shear_modulus_vrh", "vickers_hardness",
     "fracture_toughness", "debye_temperature", "slack_thermal_conductivity",
     "formation_energy_per_atom",
+    *_UMLIP_COLUMNS,
 ]
 
 
@@ -332,7 +350,15 @@ def save_candidates(candidates, save_dir: str, *, run_id: str | None = None,
             }
             for k in _CANDIDATE_COLUMNS[6:]:
                 v = p.get(k)
-                row[k] = round(float(v), 4) if v is not None else ""
+                if v is None or v == "":
+                    row[k] = ""
+                elif isinstance(v, bool) or isinstance(v, str):
+                    row[k] = v  # phonon/ensemble flags: bool or "high"/"low"
+                else:
+                    try:
+                        row[k] = round(float(v), 4)
+                    except (TypeError, ValueError):
+                        row[k] = v
             w.writerow(row)
             existing.append(s)
             added += 1
