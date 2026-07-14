@@ -84,10 +84,19 @@ class CDVAE(nn.Module):
         lat = _lattice_params(graph.lattice) / self._lat_scale
         return num_target, comp, lat, elem_idx
 
-    def forward(self, graph):
-        """Alias for :meth:`training_loss` so the model can be wrapped in DDP
-        (gradient all-reduce hooks fire only through ``Module.__call__``)."""
-        return self.training_loss(graph)
+    def forward(self, graph, pairs=None, consistency_weight: float = 0.0):
+        """Composite training loss, routed through ``__call__`` so DDP's grad
+        all-reduce hooks fire. When ``pairs`` (a ``(relaxed_graph, disp)`` tuple)
+        and a positive ``consistency_weight`` are supplied, the
+        relaxation-consistency term is added in the *same* forward/backward so its
+        gradients all-reduce alongside the reconstruction loss."""
+        total, parts = self.training_loss(graph)
+        if pairs is not None and consistency_weight > 0:
+            pg, disp = pairs
+            l_cons = self.consistency_loss(pg, disp)
+            total = total + consistency_weight * l_cons
+            parts = {**parts, "consistency": l_cons}
+        return total, parts
 
     # ---- training loss --------------------------------------------------
     def training_loss(self, graph):
@@ -133,6 +142,41 @@ class CDVAE(nn.Module):
             "type": l_type,
         }
         return total, parts
+
+    # ---- relaxation-consistency loss -----------------------------------
+    def consistency_loss(self, graph, disp):
+        """Denoise the generator's *own* geometry onto the uMLIP minimum.
+
+        ``graph`` is a batch of **relaxed** structures (canonical minima) and
+        ``disp`` [Ntot,3] is the per-atom Cartesian displacement
+        ``cart_generated - cart_relaxed`` (relaxed-cell frame). Treating the
+        generated structure ``G = R + disp`` as a noisy observation of the mode
+        ``R``, this is denoising score matching with the *actual* off-manifold
+        perturbation instead of synthetic Gaussian noise: the decoder is
+        conditioned at an effective per-graph ``sigma`` (the displacement RMS) and
+        the score is driven to ``-disp / sigma^2`` -- i.e. to point from the
+        generator's guess back to the physical minimum. This directly attacks the
+        ~1 A drift that vanilla (train-manifold) score matching leaves behind.
+        """
+        vae = self.encoder(graph)  # z from the relaxed (clean) structure
+        b = graph.batch
+        n_graphs = int(b.max()) + 1
+
+        # per-graph effective sigma = RMS(||disp||), clamped into the schedule.
+        node_sq = (disp**2).sum(-1)  # [Ntot]
+        sum_sq = torch.zeros(n_graphs, device=disp.device, dtype=disp.dtype).index_add(0, b, node_sq)
+        cnt = torch.bincount(b, minlength=n_graphs).clamp(min=1).to(disp.dtype)
+        sigma_g = (sum_sq / cnt).sqrt().clamp(self.sigma_min, float(self.sigmas[0]))  # [B]
+        sigma_node = sigma_g[b].unsqueeze(-1)  # [Ntot,1]
+
+        # place the geometry at G: relaxed edges + (disp[j] - disp[i]).
+        noisy_edge_vec = graph.edge_vec + disp[graph.edge_index[1]] - disp[graph.edge_index[0]]
+        noisy = dataclasses.replace(
+            graph, edge_vec=noisy_edge_vec, edge_len=noisy_edge_vec.norm(dim=-1)
+        )
+        score = self.decoder(noisy, vae.z, sigma_g)
+        eps = disp / sigma_node  # so that G = R + sigma_node * eps
+        return D.dsm_loss(score.coord_score, eps, sigma_node)
 
     # ---- lattice reconstruction ----------------------------------------
     def _lattice_from_params(self, params6: torch.Tensor):

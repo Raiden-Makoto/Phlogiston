@@ -46,6 +46,7 @@ def build_distill_corpus(
     shard_size: int = 2000,
     shard_start: int = 0,
     tag: str = "0",
+    store_disp: bool = False,
     device: str | None = None,
     seed: int = 0,
     verbose: bool = True,
@@ -55,7 +56,13 @@ def build_distill_corpus(
     A relaxed structure is kept when it is converged-ish (max force <=
     ``keep_fmax``) and -- if ``require_energy_drop`` -- actually lowered in energy
     (a sane relaxation). Returns a summary dict.
+
+    When ``store_disp`` is set, each record additionally carries ``relax_disp``:
+    the per-atom Cartesian displacement ``cart_generated - cart_relaxed`` (in the
+    relaxed cell's frame, min-image), which supervises the relaxation-consistency
+    loss. Relaxation preserves atom order, so the pairing is exact.
     """
+    import numpy as np
     from phlogiston.discovery.loop import drop_clashed, load_generator, sample_candidates
     from phlogiston.verify.potential import load_calculator
     from phlogiston.verify.relax import relax_structures
@@ -98,13 +105,23 @@ def build_distill_corpus(
             continue
         vals, mask = _vector_from_labels({"density": float(rr.structure.density)})
         graph_np = {k: (v.numpy() if torch.is_tensor(v) else v) for k, v in g.__dict__.items()}
-        records.append({
+        rec = {
             "id": f"distill:{tag}:{j}",
             "source": "distill",
             "graph": graph_np,
             "y": vals,
             "mask": mask,
-        })
+        }
+        if store_disp:
+            # cart_generated - cart_relaxed in the relaxed cell's frame (min-image),
+            # matching relax._drift so d supervises the score toward the minimum.
+            relaxed = rr.structure
+            gen = sane[j]
+            dfrac = np.asarray(gen.frac_coords) - np.asarray(relaxed.frac_coords)
+            dfrac -= np.round(dfrac)
+            disp = dfrac @ relaxed.lattice.matrix  # [N,3] Cartesian, gen - relaxed
+            rec["relax_disp"] = disp.astype("float32")
+        records.append(rec)
         rmsds.append(rr.rmsd)
 
     sd = shard_dir(out_root)

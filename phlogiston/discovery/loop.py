@@ -121,7 +121,7 @@ def discover(
     max_elements: int = 5,
     max_reduced_atoms: int = 40,
     allow_radioactive: bool = False,
-    umlip_gate: bool = False,
+    umlip_gate: bool = True,
     umlip_backend: str = "chgnet",
     umlip_e_hull_max: float = 0.1,
     umlip_relax_steps: int = 300,

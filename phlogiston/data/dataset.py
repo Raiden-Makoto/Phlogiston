@@ -231,3 +231,66 @@ class ShardedCrystalDataset(Dataset):
         m = torch.tensor(r["mask"], dtype=torch.bool) & physical_mask(y)
         y = torch.where(m, y, torch.zeros_like(y))
         return g, y, m
+
+
+def _graph_from_record(gd: dict) -> CrystalGraph:
+    return CrystalGraph(
+        z=torch.as_tensor(gd["z"], dtype=torch.long),
+        pos=torch.as_tensor(gd["pos"], dtype=torch.float32),
+        lattice=torch.as_tensor(gd["lattice"], dtype=torch.float32),
+        edge_index=torch.as_tensor(gd["edge_index"], dtype=torch.long),
+        edge_vec=torch.as_tensor(gd["edge_vec"], dtype=torch.float32),
+        edge_len=torch.as_tensor(gd["edge_len"], dtype=torch.float32),
+        num_nodes=int(gd["num_nodes"]),
+    )
+
+
+class ConsistencyDataset(Dataset):
+    """Reads generated->relaxed *pairs* for the relaxation-consistency loss.
+
+    Each item is (relaxed CrystalGraph, relax_disp), where ``relax_disp`` [N,3] is
+    the per-atom Cartesian displacement ``cart_generated - cart_relaxed`` (relaxed
+    cell frame). Only records carrying ``relax_disp`` (written by
+    ``build_distill_corpus(store_disp=True)``) are used.
+    """
+
+    def __init__(self, data_root: str, max_shards: int | None = None):
+        from phlogiston.data.precompute import shard_dir
+
+        shards = sorted(shard_dir(data_root).glob("shard_*.pt"))
+        if not shards:
+            raise FileNotFoundError(f"No shards under {shard_dir(data_root)}")
+        if max_shards is not None:
+            shards = shards[:max_shards]
+        self.records: list[dict] = []
+        for s in shards:
+            for r in torch.load(s, weights_only=False):
+                if "relax_disp" in r:
+                    self.records.append(r)
+        if not self.records:
+            raise ValueError(
+                f"No records with 'relax_disp' under {data_root}; build the corpus "
+                "with store_disp=True."
+            )
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, idx: int):
+        r = self.records[idx]
+        g = _graph_from_record(r["graph"])
+        disp = torch.as_tensor(r["relax_disp"], dtype=torch.float32)
+        return g, disp
+
+
+def collate_pairs(items: list[tuple[CrystalGraph, torch.Tensor]]):
+    """Collate (graph, disp) pairs into (BatchedGraph, disp[Ntot,3]).
+
+    Reuses :func:`collate` with dummy targets so the batched graph geometry and
+    the per-node displacement share the same node ordering/offsets.
+    """
+    dummy_y = torch.zeros(len(TARGET_KEYS))
+    dummy_m = torch.zeros(len(TARGET_KEYS), dtype=torch.bool)
+    batch = collate([(g, dummy_y, dummy_m) for g, _ in items])
+    disp = torch.cat([d for _, d in items], dim=0)
+    return batch, disp

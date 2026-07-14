@@ -193,6 +193,9 @@ def _cmd_train_cdvae(args: argparse.Namespace) -> int:
         num_workers=args.num_workers,
         distill_root=args.distill_root,
         distill_weight=args.distill_weight,
+        consistency_root=args.consistency_root,
+        consistency_weight=args.consistency_weight,
+        consistency_batch_size=args.consistency_batch_size,
     )
     return 0
 
@@ -214,6 +217,7 @@ def _cmd_distill_corpus(args: argparse.Namespace) -> int:
         shard_size=args.shard_size,
         shard_start=args.shard_start,
         tag=args.tag,
+        store_disp=args.store_disp,
         seed=args.seed,
     )
     return 0
@@ -723,6 +727,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--distill-weight", type=int, default=1,
         help="Replicate the distill corpus this many times in the train split (up-weight)",
     )
+    tc.add_argument(
+        "--consistency-root", default=None,
+        help="Relaxation-consistency corpus (generated->relaxed pairs with per-atom "
+        "displacement, from `distill-corpus --store-disp`). Adds a denoising term that "
+        "drives the decoder's score to flow the generator's own geometry onto the uMLIP "
+        "minimum -- directly attacking off-manifold drift.",
+    )
+    tc.add_argument(
+        "--consistency-weight", type=float, default=0.0,
+        help="Weight on the relaxation-consistency loss (0 = off).",
+    )
+    tc.add_argument(
+        "--consistency-batch-size", type=int, default=64,
+        help="Pairs per consistency step (one drawn per train step, cycled).",
+    )
     tc.set_defaults(func=_cmd_train_cdvae)
 
     dcorp = sub.add_parser(
@@ -745,6 +764,9 @@ def build_parser() -> argparse.ArgumentParser:
     dcorp.add_argument("--shard-start", type=int, default=0,
                        help="First shard index (offset so parallel workers don't collide)")
     dcorp.add_argument("--tag", default="0", help="Record id prefix (unique per parallel worker)")
+    dcorp.add_argument("--store-disp", action="store_true",
+                       help="Also store per-atom displacement (generated - relaxed) for the "
+                       "relaxation-consistency loss (train-cdvae --consistency-root).")
     dcorp.add_argument("--seed", type=int, default=0)
     dcorp.set_defaults(func=_cmd_distill_corpus)
 
@@ -797,10 +819,13 @@ def build_parser() -> argparse.ArgumentParser:
     dc.add_argument("--max-reduced-atoms", type=int, default=40, help="Tier-0: max atoms in reduced formula")
     dc.add_argument("--allow-radioactive", action="store_true", help="Tier-0: permit radioactive elements")
     dc.add_argument(
-        "--umlip-gate", action="store_true",
-        help="Tier-1.5: relax survivors with a uMLIP and gate on the self-consistent "
-        "uMLIP hull distance. Closes the predictor's off-manifold blind spot so the "
-        "saved candidates are already physically verified (relax+hull).",
+        "--umlip-gate", action=argparse.BooleanOptionalAction, default=True,
+        help="Tier-1.5 (DEFAULT ON): relax survivors with a uMLIP and gate on the "
+        "self-consistent uMLIP hull distance. Closes the predictor's off-manifold "
+        "blind spot so the saved candidates are already physically verified "
+        "(relax+hull). The generator is only an approximate proposer -- relaxation "
+        "replaces its geometry downstream. Use --no-umlip-gate for a fast, "
+        "unverified proposal-only pass.",
     )
     dc.add_argument("--umlip-backend", default="chgnet", help="Tier-1.5 uMLIP backend (chgnet | mattersim)")
     dc.add_argument("--umlip-e-hull-max", type=float, default=0.1,

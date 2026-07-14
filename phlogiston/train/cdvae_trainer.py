@@ -21,7 +21,13 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, Subset
 from torch.utils.data.distributed import DistributedSampler
 
-from phlogiston.data.dataset import ShardedCrystalDataset, collate, physical_mask
+from phlogiston.data.dataset import (
+    ConsistencyDataset,
+    ShardedCrystalDataset,
+    collate,
+    collate_pairs,
+    physical_mask,
+)
 from phlogiston.models.cdvae import CDVAE
 from phlogiston.train.ema import EMA
 
@@ -116,6 +122,9 @@ def train_cdvae(
     num_workers: int = 4,
     distill_root: str | None = None,
     distill_weight: int = 1,
+    consistency_root: str | None = None,
+    consistency_weight: float = 0.0,
+    consistency_batch_size: int = 64,
     seed: int = 42,
 ):
     if num_workers > 0:
@@ -185,10 +194,10 @@ def train_cdvae(
     train_subset = Subset(dataset, tr)
     # Relaxation self-distillation: mix the corpus of uMLIP-relaxed generated
     # structures into the TRAIN split only (never val), replicated to up-weight
-    # the scarce corpus vs. the large original set. Single-process only.
+    # the scarce corpus vs. the large original set. Works under DDP: the mixed
+    # ConcatDataset is wrapped by a DistributedSampler below, so the replicated
+    # corpus is sharded across ranks like any other train data.
     if distill_root:
-        if distributed:
-            raise ValueError("distill mixing is single-process; launch without torchrun")
         from torch.utils.data import ConcatDataset
 
         corpus = ShardedCrystalDataset(distill_root)
@@ -210,6 +219,26 @@ def train_cdvae(
         train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True, **dl_kw)
         val_loader = DataLoader(Subset(dataset, va), batch_size=batch_size, shuffle=False, **dl_kw)
 
+    # Relaxation-consistency: a separate loader of generated->relaxed pairs. Each
+    # train step draws one pairs batch and adds w * consistency_loss in the SAME
+    # forward (so DDP all-reduces its grads). The corpus is small, so the loader
+    # is cycled; under DDP each rank sees a shard via its own DistributedSampler.
+    cons_loader = cons_sampler = None
+    use_consistency = bool(consistency_root) and consistency_weight > 0
+    if use_consistency:
+        cons_ds = ConsistencyDataset(consistency_root)
+        log(f"[cdvae] consistency corpus: {len(cons_ds):,} generated->relaxed pairs "
+            f"(weight {consistency_weight}, batch {consistency_batch_size})")
+        cons_kw = dict(collate_fn=collate_pairs, num_workers=max(1, num_workers // 2),
+                       persistent_workers=num_workers > 0, drop_last=True)
+        if distributed:
+            cons_sampler = DistributedSampler(cons_ds, shuffle=True, seed=seed)
+            cons_loader = DataLoader(cons_ds, batch_size=consistency_batch_size,
+                                     sampler=cons_sampler, **cons_kw)
+        else:
+            cons_loader = DataLoader(cons_ds, batch_size=consistency_batch_size,
+                                     shuffle=True, **cons_kw)
+
     last_path = Path(out_dir) / "cdvae_last.pt"
     best_path = Path(out_dir) / "cdvae_best.pt"
     hparams = {
@@ -218,14 +247,28 @@ def train_cdvae(
     }
     epochs_no_improve = 0
 
+    def _cons_batches():
+        """Endlessly yield pairs batches, reshuffling each cycle (DDP-aware)."""
+        cyc = 0
+        while True:
+            if cons_sampler is not None:
+                cons_sampler.set_epoch(1000 + cyc)
+            yield from cons_loader
+            cyc += 1
+
     for epoch in range(start_epoch, epochs):
         if train_sampler is not None:
             train_sampler.set_epoch(epoch)
         model.train()
-        t0, running, n_batches = time.time(), 0.0, 0
+        cons_iter = _cons_batches() if use_consistency else None
+        t0, running, running_cons, n_batches = time.time(), 0.0, 0.0, 0
         for batch in train_loader:
             batch = batch.to(device)
-            total, _ = model(batch)  # DDP.forward -> CDVAE.forward -> training_loss
+            pairs = None
+            if cons_iter is not None:
+                pg, disp = next(cons_iter)
+                pairs = (pg.to(device), disp.to(device))
+            total, parts_tr = model(batch, pairs=pairs, consistency_weight=consistency_weight)
             opt.zero_grad()
             total.backward()
             if grad_clip > 0:
@@ -233,6 +276,8 @@ def train_cdvae(
             opt.step()
             ema.update(base)
             running += total.item()
+            if "consistency" in parts_tr:
+                running_cons += float(parts_tr["consistency"])
             n_batches += 1
         sched.step()
 
@@ -246,9 +291,10 @@ def train_cdvae(
         else:
             epochs_no_improve += 1
         parts_s = " ".join(f"{k}={parts[k]:.3f}" for k in _LOSS_KEYS)
+        cons_s = f" consistency(tr)={running_cons / max(n_batches, 1):.3f}" if use_consistency else ""
         log(
             f"[cdvae] epoch {epoch + 1}/{epochs} train={running / max(n_batches, 1):.4f} "
-            f"val(EMA)={val_loss:.4f}{' *' if improved else ''} | {parts_s} "
+            f"val(EMA)={val_loss:.4f}{' *' if improved else ''} | {parts_s}{cons_s} "
             f"{time.time() - t0:.1f}s"
         )
         if is_main:
