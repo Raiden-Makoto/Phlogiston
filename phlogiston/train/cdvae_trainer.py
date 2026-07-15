@@ -277,7 +277,7 @@ def train_cdvae(
             ema.update(base)
             running += total.item()
             if "consistency" in parts_tr:
-                running_cons += float(parts_tr["consistency"])
+                running_cons += float(parts_tr["consistency"].detach())
             n_batches += 1
         sched.step()
 
