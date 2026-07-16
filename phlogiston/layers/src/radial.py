@@ -75,6 +75,23 @@ class RadialBasis(nn.Module):
         self.mlp = nn.Sequential(*layers)
         self.n_out = n_out
 
+        # This MLP's output *is* the tensor-product path weights (tp has
+        # shared_weights=False, internal_weights=False), so its init scale
+        # directly sets each interaction layer's gain. Default nn.Linear init
+        # gives each of the (often thousands of, at wide mul) output paths
+        # O(1/sqrt(fan_in)) variance; summed across many uuu/uvu paths and then
+        # *multiplicatively compounded* through SymmetricContraction's
+        # per-order products and across n_layers stacked interactions, this
+        # reliably blows up to 1e18+ purely from random init (no training
+        # dynamics needed -- reproduces even at ~0 effective LR during warmup).
+        # Shrink just the final layer so each layer starts close to a small
+        # perturbation rather than an uncontrolled-gain transform; gradients
+        # can still grow it during training.
+        last_linear = [m for m in self.mlp if isinstance(m, nn.Linear)][-1]
+        with torch.no_grad():
+            last_linear.weight.mul_(0.05)
+            last_linear.bias.zero_()
+
     def forward(self, edge_len: torch.Tensor) -> torch.Tensor:  # [E]
         w = self.mlp(self.bessel(edge_len))  # [E, n_out]
         return w * self.cutoff(edge_len).unsqueeze(-1)  # damp to 0 at r_max
