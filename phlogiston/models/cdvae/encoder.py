@@ -37,10 +37,17 @@ class CDVAEEncoder(nn.Module):
     # random init. +-10 keeps std in [~0.007, ~148], ample range for a unit
     # Gaussian prior while staying numerically finite everywhere.
     _LOGVAR_CLAMP = 10.0
+    # mu.pow(2) in kl_loss is unbounded even with logvar clamped: on outlier
+    # batches (unusually large/complex graphs at random init) the pooled graph
+    # feature itself can be huge, and everything downstream of z -- kl, and
+    # every predictor head via z -- inherits that. +-50 is generous for a
+    # latent meant to sit near a unit Gaussian prior (a well-trained encoder
+    # should never need to push mu this far anyway).
+    _MU_CLAMP = 50.0
 
     def forward(self, graph) -> VAEOutput:
         gf = self.encoder(graph).graph_feats  # [B, mul] invariant
-        mu = self.to_mu(gf)
+        mu = self.to_mu(gf).clamp(-self._MU_CLAMP, self._MU_CLAMP)
         logvar = self.to_logvar(gf).clamp(-self._LOGVAR_CLAMP, self._LOGVAR_CLAMP)
         std = torch.exp(0.5 * logvar)
         z = mu + std * torch.randn_like(std)  # reparameterization
