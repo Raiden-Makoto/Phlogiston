@@ -32,6 +32,15 @@ class SphericalHarmonics(torch.nn.Module):
         self.normalization = normalization
 
     def forward(self, edge_vec: torch.Tensor) -> torch.Tensor:
+        if self.normalize:
+            # o3.spherical_harmonics(normalize=True) divides by the vector norm
+            # internally; a near-zero-length edge (e.g. from training-time
+            # coordinate noise nearly cancelling out a short edge) gives a
+            # near-0/0 division -> nan/inf that poisons the whole batch. Floor
+            # the norm and rescale so direction stays defined (arbitrarily, for
+            # this physically-meaningless case) instead of blowing up.
+            norm = edge_vec.norm(dim=-1, keepdim=True)
+            edge_vec = edge_vec * (norm.clamp(min=1e-2) / norm.clamp(min=1e-12))
         return o3.spherical_harmonics(
             self.irreps_out,
             edge_vec,

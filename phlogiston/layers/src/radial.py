@@ -24,7 +24,13 @@ class BesselBasis(nn.Module):
         self.register_buffer("freqs", math.pi * torch.arange(1, n_bessel + 1, dtype=torch.float64))
 
     def forward(self, d: torch.Tensor) -> torch.Tensor:  # d [E]
-        d = d.unsqueeze(-1)  # [E,1]
+        # sin(x)/d has a removable singularity at d -> 0 (limit sqrt(2/r_max)*freq/r_max),
+        # but computed directly it blows up for any d numerically close to zero. During
+        # training, coordinate-noising can push two atoms' *noisy* edge length arbitrarily
+        # close to zero (opposing per-node displacements nearly cancelling a short edge),
+        # even though the clean structure never has near-zero distances. Floor d so this
+        # stays finite; the true short-distance regime is unphysical/never sampled anyway.
+        d = d.clamp(min=1e-2).unsqueeze(-1)  # [E,1]
         freqs = self.freqs.to(d.dtype)
         return self.prefactor * torch.sin(freqs * d / self.r_max) / d  # [E, n_bessel]
 
