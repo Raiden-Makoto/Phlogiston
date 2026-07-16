@@ -122,7 +122,14 @@ class CDVAE(nn.Module):
             graph, edge_vec=noisy_edge_vec, edge_len=noisy_edge_vec.norm(dim=-1)
         )
         score = self.decoder(noisy, vae.z, sigma_g)
-        l_coord = D.dsm_loss(score.coord_score, eps, sigma_node)
+        # Defensive clamp on the raw score head: at random init (or on rare
+        # unstable batches) the decoder's unconstrained equivariant readout can
+        # spike to extreme magnitudes, which squared in dsm_loss overflows to
+        # inf and poisons the whole step. +-1e4 is generous relative to any
+        # legitimate score (~-eps/sigma, at most a few hundred even at
+        # sigma_min=0.01), so this only clips genuinely degenerate outputs.
+        coord_score = score.coord_score.clamp(-1e4, 1e4)
+        l_coord = D.dsm_loss(coord_score, eps, sigma_node)
         l_type = F.cross_entropy(score.type_logits, elem_idx)
 
         total = (
@@ -175,8 +182,9 @@ class CDVAE(nn.Module):
             graph, edge_vec=noisy_edge_vec, edge_len=noisy_edge_vec.norm(dim=-1)
         )
         score = self.decoder(noisy, vae.z, sigma_g)
+        coord_score = score.coord_score.clamp(-1e4, 1e4)  # see training_loss
         eps = disp / sigma_node  # so that G = R + sigma_node * eps
-        return D.dsm_loss(score.coord_score, eps, sigma_node)
+        return D.dsm_loss(coord_score, eps, sigma_node)
 
     # ---- lattice reconstruction ----------------------------------------
     def _lattice_from_params(self, params6: torch.Tensor):
