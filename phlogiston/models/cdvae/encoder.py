@@ -30,10 +30,18 @@ class CDVAEEncoder(nn.Module):
         self.to_mu = nn.Linear(mul, latent_dim)
         self.to_logvar = nn.Linear(mul, latent_dim)
 
+    # Clamp range for logvar: unconstrained, a wide encoder (large ``mul``) can
+    # output values large enough that .exp() overflows float32 (exp(x) is inf
+    # for x >~ 88), producing an inf KL term on step 0 that poisons every other
+    # loss via the shared ``z`` -- before any training instability, just from
+    # random init. +-10 keeps std in [~0.007, ~148], ample range for a unit
+    # Gaussian prior while staying numerically finite everywhere.
+    _LOGVAR_CLAMP = 10.0
+
     def forward(self, graph) -> VAEOutput:
         gf = self.encoder(graph).graph_feats  # [B, mul] invariant
         mu = self.to_mu(gf)
-        logvar = self.to_logvar(gf)
+        logvar = self.to_logvar(gf).clamp(-self._LOGVAR_CLAMP, self._LOGVAR_CLAMP)
         std = torch.exp(0.5 * logvar)
         z = mu + std * torch.randn_like(std)  # reparameterization
         return VAEOutput(z=z, mu=mu, logvar=logvar)
