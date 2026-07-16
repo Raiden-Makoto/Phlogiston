@@ -133,7 +133,17 @@ def train_cdvae(
     world, rank, local = _dist_info()
     distributed = world > 1
     if distributed:
-        dist.init_process_group(backend="nccl")
+        import datetime
+        import os as _os
+
+        # Default NCCL collective timeout is 10 min, which makes any transient
+        # comm hang (flaky interconnect, a stalled rank, etc.) an expensive,
+        # near-silent stall before ProcessGroupNCCL's watchdog finally aborts.
+        # Fail fast instead -- override via PHLOGISTON_NCCL_TIMEOUT_S if a
+        # legitimately slow first collective (e.g. huge in-memory dataset load
+        # skewing ranks) needs more headroom.
+        timeout_s = int(_os.environ.get("PHLOGISTON_NCCL_TIMEOUT_S", "120"))
+        dist.init_process_group(backend="nccl", timeout=datetime.timedelta(seconds=timeout_s))
         torch.cuda.set_device(local)
         device = f"cuda:{local}"
     else:
