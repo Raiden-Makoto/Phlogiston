@@ -262,23 +262,61 @@ def train_cdvae(
         model.train()
         cons_iter = _cons_batches() if use_consistency else None
         t0, running, running_cons, n_batches = time.time(), 0.0, 0.0, 0
-        for batch in train_loader:
+        n_skipped = 0
+        for step_i, batch in enumerate(train_loader):
             batch = batch.to(device)
             pairs = None
             if cons_iter is not None:
                 pg, disp = next(cons_iter)
                 pairs = (pg.to(device), disp.to(device))
             total, parts_tr = model(batch, pairs=pairs, consistency_weight=consistency_weight)
+
+            # Guard against a single anomalous batch permanently poisoning the run:
+            # once nan/inf enters the weights there is no recovering within-run (every
+            # later step and the EMA average stay nan forever). Detect *before*
+            # opt.step() commits anything, skip just this batch, and keep training.
+            if not torch.isfinite(total):
+                n_skipped += 1
+                log(f"[cdvae] epoch {epoch + 1} step {step_i}: non-finite loss "
+                    f"({total.item()}), skipping batch | "
+                    f"parts={ {k: float(v) for k, v in parts_tr.items() if hasattr(v, 'item')} }")
+                opt.zero_grad(set_to_none=True)
+                continue
+
             opt.zero_grad()
             total.backward()
-            if grad_clip > 0:
-                torch.nn.utils.clip_grad_norm_(base.parameters(), grad_clip)
+            gn = torch.nn.utils.clip_grad_norm_(base.parameters(), grad_clip) if grad_clip > 0 else None
+            if gn is not None and not torch.isfinite(gn):
+                n_skipped += 1
+                log(f"[cdvae] epoch {epoch + 1} step {step_i}: non-finite grad norm "
+                    f"({float(gn)}), skipping batch")
+                opt.zero_grad(set_to_none=True)
+                continue
+
             opt.step()
+
+            # Belt-and-suspenders: verify the step itself didn't produce non-finite
+            # weights (e.g. from an optimizer state corrupted by a prior extreme
+            # update). If it did, we cannot undo opt.step() cheaply, so this is a
+            # hard stop rather than a skip -- surface it loudly instead of silently
+            # training on garbage.
+            if step_i % 50 == 0:
+                bad_param = next((n for n, p in base.named_parameters()
+                                   if not torch.isfinite(p).all()), None)
+                if bad_param is not None:
+                    raise RuntimeError(
+                        f"[cdvae] epoch {epoch + 1} step {step_i}: parameter '{bad_param}' "
+                        f"went non-finite after opt.step(); aborting instead of training on "
+                        f"corrupted weights."
+                    )
+
             ema.update(base)
             running += total.item()
             if "consistency" in parts_tr:
                 running_cons += float(parts_tr["consistency"].detach())
             n_batches += 1
+        if n_skipped:
+            log(f"[cdvae] epoch {epoch + 1}: skipped {n_skipped} non-finite batch(es)")
         sched.step()
 
         # validate with EMA weights (what we'll sample from)
