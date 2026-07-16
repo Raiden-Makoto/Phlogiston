@@ -279,7 +279,7 @@ def train_cdvae(
                 n_skipped += 1
                 log(f"[cdvae] epoch {epoch + 1} step {step_i}: non-finite loss "
                     f"({total.item()}), skipping batch | "
-                    f"parts={ {k: float(v) for k, v in parts_tr.items() if hasattr(v, 'item')} }")
+                    f"parts={ {k: float(v.detach()) for k, v in parts_tr.items() if hasattr(v, 'item')} }")
                 opt.zero_grad(set_to_none=True)
                 continue
 
