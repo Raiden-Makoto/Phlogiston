@@ -67,13 +67,24 @@ def evaluate(model, loader, device, distributed: bool = False):
     base = _unwrap(model)
     acc = torch.zeros(len(_LOSS_KEYS) + 1, device=device)  # [total, *parts]
     nb = torch.zeros(1, device=device)
+    n_skipped = 0
     for batch in loader:
         batch = batch.to(device)
         total, parts = base.training_loss(batch)
+        # Same rare-degenerate-batch issue as training (see cdvae_trainer's
+        # skip logic): without this, a single non-finite val batch (near-
+        # guaranteed over ~1000 batches at the observed ~0.1-0.2% rate)
+        # poisons the whole aggregate to nan forever via nan+x=nan, making
+        # val(EMA) uninformative and best-checkpoint tracking meaningless.
+        if not torch.isfinite(total):
+            n_skipped += 1
+            continue
         acc[0] += total.detach()
         for j, k in enumerate(_LOSS_KEYS, start=1):
             acc[j] += parts[k].detach()
         nb += 1
+    if n_skipped:
+        print(f"[cdvae] eval: skipped {n_skipped} non-finite batch(es)", flush=True)
     if distributed:
         dist.all_reduce(acc)
         dist.all_reduce(nb)
