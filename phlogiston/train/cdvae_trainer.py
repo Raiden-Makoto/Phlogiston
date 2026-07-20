@@ -137,6 +137,7 @@ def train_cdvae(
     consistency_weight: float = 0.0,
     consistency_batch_size: int = 64,
     seed: int = 42,
+    compile_model: bool = False,
 ):
     if num_workers > 0:
         torch.multiprocessing.set_sharing_strategy("file_system")
@@ -192,6 +193,23 @@ def train_cdvae(
     elif init_state is not None:
         model.load_state_dict(init_state["model"])
         log(f"[cdvae] warm-started (weights+EMA, fresh schedule) from {init_ckpt}")
+
+    if compile_model:
+        # e3nn's default jit_mode="script" wraps TensorProduct/Linear forwards in
+        # torch.jit.ScriptModules that Dynamo can't trace into, so torch.compile
+        # graph-breaks around every one of them and fuses nothing (measured: 0%
+        # speedup). "inductor" mode makes e3nn emit FX-traceable code instead, so
+        # Dynamo can actually fuse the many small CG-tensor-product ops.
+        # dynamic=True is required in practice: every batch has a different
+        # node/edge count (structures vary in size), and dynamic=False would
+        # recompile (~minutes) on every new shape.
+        import e3nn
+
+        e3nn.set_optimization_defaults(jit_mode="inductor")
+        model.encoder = torch.compile(model.encoder, dynamic=True)
+        model.decoder = torch.compile(model.decoder, dynamic=True)
+        log("[cdvae] compiling encoder/decoder (jit_mode=inductor, dynamic=True); "
+            "first batch will be slow (one-time Triton codegen).")
 
     base = model
     if distributed:
@@ -296,11 +314,18 @@ def train_cdvae(
             # once nan/inf enters the weights there is no recovering within-run (every
             # later step and the EMA average stay nan forever). Detect *before*
             # opt.step() commits anything, skip just this batch, and keep training.
-            if not torch.isfinite(total):
+            local_bad = torch.tensor(0.0 if torch.isfinite(total) else 1.0, device=device)
+            if distributed:
+                dist.all_reduce(local_bad, op=dist.ReduceOp.MAX)
+            if local_bad.item() > 0:
                 n_skipped += 1
-                log(f"[cdvae] epoch {epoch + 1} step {step_i}: non-finite loss "
-                    f"({total.item()}), skipping batch | "
-                    f"parts={ {k: float(v.detach()) for k, v in parts_tr.items() if hasattr(v, 'item')} }")
+                if torch.isfinite(total):
+                    log(f"[cdvae] epoch {epoch + 1} step {step_i}: skipping batch "
+                        f"(a peer rank hit a non-finite loss)")
+                else:
+                    log(f"[cdvae] epoch {epoch + 1} step {step_i}: non-finite loss "
+                        f"({total.item()}), skipping batch | "
+                        f"parts={ {k: float(v.detach()) for k, v in parts_tr.items() if hasattr(v, 'item')} }")
                 opt.zero_grad(set_to_none=True)
                 continue
 

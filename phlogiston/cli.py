@@ -196,6 +196,7 @@ def _cmd_train_cdvae(args: argparse.Namespace) -> int:
         consistency_root=args.consistency_root,
         consistency_weight=args.consistency_weight,
         consistency_batch_size=args.consistency_batch_size,
+        compile_model=args.compile,
     )
     return 0
 
@@ -741,6 +742,12 @@ def build_parser() -> argparse.ArgumentParser:
     tc.add_argument(
         "--consistency-batch-size", type=int, default=64,
         help="Pairs per consistency step (one drawn per train step, cycled).",
+    )
+    tc.add_argument(
+        "--compile", action="store_true",
+        help="torch.compile the encoder/decoder (e3nn jit_mode=inductor, dynamic=True). "
+        "~2x throughput measured single-GPU; first batch pays a one-time ~5min "
+        "Triton codegen cost. Not yet verified under DDP.",
     )
     tc.set_defaults(func=_cmd_train_cdvae)
 
